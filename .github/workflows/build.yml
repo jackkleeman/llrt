@@ -1,5 +1,19 @@
 name: Setup, Build & Test
 on:
+  workflow_dispatch:
+    inputs:
+      os:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+      release:
+        required: false
+        type: string
   workflow_call:
     inputs:
       os:
