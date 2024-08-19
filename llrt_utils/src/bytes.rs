@@ -1,7 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use rquickjs::{ArrayBuffer, Coerced, Ctx, Exception, IntoJs, Object, Result, TypedArray, Value};
+use rquickjs::{
+    ArrayBuffer, Coerced, Ctx, Exception, FromJs, IntoJs, Object, Result, TypedArray, Value,
+};
 
 use crate::error_messages::ERROR_MSG_ARRAY_BUFFER_DETACHED;
 
@@ -19,6 +21,31 @@ pub enum ObjectBytes<'js> {
     F64Array(TypedArray<'js, f64>),
     DataView(ArrayBuffer<'js>),
     Vec(Vec<u8>),
+}
+
+impl<'js> IntoJs<'js> for ObjectBytes<'js> {
+    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
+        match self {
+            ObjectBytes::U8Array(a) => a.into_js(ctx),
+            ObjectBytes::I8Array(a) => a.into_js(ctx),
+            ObjectBytes::U16Array(a) => a.into_js(ctx),
+            ObjectBytes::I16Array(a) => a.into_js(ctx),
+            ObjectBytes::U32Array(a) => a.into_js(ctx),
+            ObjectBytes::I32Array(a) => a.into_js(ctx),
+            ObjectBytes::U64Array(a) => a.into_js(ctx),
+            ObjectBytes::I64Array(a) => a.into_js(ctx),
+            ObjectBytes::F32Array(a) => a.into_js(ctx),
+            ObjectBytes::F64Array(a) => a.into_js(ctx),
+            ObjectBytes::DataView(d) => d.into_js(ctx),
+            ObjectBytes::Vec(v) => v.into_js(ctx),
+        }
+    }
+}
+
+impl<'js> FromJs<'js> for ObjectBytes<'js> {
+    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+        Self::from(ctx, &value)
+    }
 }
 
 impl<'js> From<ObjectBytes<'js>> for Vec<u8> {

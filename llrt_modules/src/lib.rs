@@ -13,6 +13,6 @@ mod sysinfo;
 #[cfg(test)]
 mod test;
 pub mod time;
-mod utils;
+pub mod utils;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
