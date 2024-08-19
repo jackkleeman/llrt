@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use rquickjs::{class::Trace, Class, Result, Value};
+use rquickjs::{class::Trace, Class, Ctx, Result, Value};
 
 use super::{ReadableStreamGenericReader, ReadableStreamReadRequest, ReadableStreamState};
 
@@ -31,8 +31,9 @@ impl<'js> ReadableStreamDefaultReader<'js> {
     }
 
     fn readable_stream_default_reader_read(
+        ctx: &Ctx<'js>,
         reader: Class<'js, Self>,
-        read_request: &ReadableStreamReadRequest<'js>,
+        read_request: ReadableStreamReadRequest<'js>,
     ) -> Result<()> {
         // Let stream be reader.[[stream]].
         let stream = reader.borrow().generic.stream.clone();
@@ -41,16 +42,24 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         stream.disturbed = true;
         match stream.state {
             // If stream.[[state]] is "closed", perform readRequest’s close steps.
-            ReadableStreamState::Closed => read_request.close_steps.call(()),
+            ReadableStreamState::Closed => read_request.close_steps.call(())?,
             // Otherwise, if stream.[[state]] is "errored", perform readRequest’s error steps given stream.[[storedError]].
-            ReadableStreamState::Errored => read_request
-                .error_steps
-                .call((stream.stored_error.clone(),)),
+            ReadableStreamState::Errored => {
+                read_request
+                    .error_steps
+                    .call((stream.stored_error.clone(),))?;
+            },
             // Otherwise,
             _ => {
                 // Perform ! stream.[[controller]].[[PullSteps]](readRequest).
-                unimplemented!()
+                stream
+                    .controller
+                    .as_ref()
+                    .expect("ReadableStreamDefaultReaderRead called without stream controller")
+                    .pull_steps(ctx, read_request)?;
             },
         }
+
+        Ok(())
     }
 }

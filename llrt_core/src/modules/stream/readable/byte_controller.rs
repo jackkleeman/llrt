@@ -7,12 +7,12 @@ use llrt_utils::{
 };
 use rquickjs::{
     atom::PredefinedAtom, class::Trace, function::Constructor, prelude::This, ArrayBuffer, Class,
-    Ctx, Exception, Function, Object, Result, TypedArray, Value,
+    Ctx, Error, Exception, Function, IntoJs, Object, Result, TypedArray, Value,
 };
 
 use super::{
     copy_data_block_bytes, promise_resolved_with, transfer_array_buffer, upon_promise,
-    PullAlgorithm, ReadableStream, ReadableStreamController,
+    CancelAlgorithm, PullAlgorithm, ReadableStream, ReadableStreamController,
     ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamState, StartAlgorithm,
     UnderlyingSource,
 };
@@ -20,10 +20,10 @@ use super::{
 #[derive(Trace, Default)]
 #[rquickjs::class]
 pub(super) struct ReadableStreamByteController<'js> {
-    auto_allocate_chunk_size: Option<u64>,
+    auto_allocate_chunk_size: Option<usize>,
     #[qjs(get)]
     byob_request: Option<ReadableStreamBYOBRequest<'js>>,
-    cancel_algorithm: Option<Function<'js>>,
+    cancel_algorithm: Option<CancelAlgorithm<'js>>,
     close_requested: bool,
     pull_again: bool,
     pull_algorithm: Option<PullAlgorithm<'js>>,
@@ -64,12 +64,18 @@ impl<'js> ReadableStreamByteController<'js> {
                         .pull
                         .map(|f| PullAlgorithm::Function {
                             f,
-                            underlying_source: underlying_source.js,
+                            underlying_source: underlying_source.js.clone(),
                         })
                         .unwrap_or(PullAlgorithm::ReturnPromiseUndefined),
                     // If underlyingSourceDict["cancel"] exists, then set cancelAlgorithm to an algorithm which takes an argument reason and returns the result of invoking underlyingSourceDict["cancel"] with argument list
                     // « reason » and callback this value underlyingSource.
-                    underlying_source.cancel,
+                    underlying_source
+                        .cancel
+                        .map(|f| CancelAlgorithm::Function {
+                            f,
+                            underlying_source: underlying_source.js,
+                        })
+                        .unwrap_or(CancelAlgorithm::ReturnPromiseUndefined),
                     // Let autoAllocateChunkSize be underlyingSourceDict["autoAllocateChunkSize"], if it exists, or undefined otherwise.
                     underlying_source.auto_allocate_chunk_size,
                 )
@@ -77,7 +83,7 @@ impl<'js> ReadableStreamByteController<'js> {
                 (
                     StartAlgorithm::ReturnUndefined,
                     PullAlgorithm::ReturnPromiseUndefined,
-                    None,
+                    CancelAlgorithm::ReturnPromiseUndefined,
                     None,
                 )
             };
@@ -108,13 +114,14 @@ impl<'js> ReadableStreamByteController<'js> {
         controller: Class<'js, ReadableStreamByteController<'js>>,
         start_algorithm: StartAlgorithm<'js>,
         pull_algorithm: PullAlgorithm<'js>,
-        cancel_algorithm: Option<Function<'js>>,
+        cancel_algorithm: CancelAlgorithm<'js>,
         high_water_mark: usize,
-        auto_allocate_chunk_size: Option<u64>,
+        auto_allocate_chunk_size: Option<usize>,
     ) -> Result<()> {
         {
             let mut controller = controller.borrow_mut();
 
+            // Set controller.[[stream]] to stream.
             controller.stream = Some(stream.clone());
 
             // Set controller.[[pullAgain]] and controller.[[pulling]] to false.
@@ -138,7 +145,7 @@ impl<'js> ReadableStreamByteController<'js> {
             controller.pull_algorithm = Some(pull_algorithm);
 
             // Set controller.[[cancelAlgorithm]] to cancelAlgorithm.
-            controller.cancel_algorithm = cancel_algorithm;
+            controller.cancel_algorithm = Some(cancel_algorithm);
 
             // Set controller.[[autoAllocateChunkSize]] to autoAllocateChunkSize.
             controller.auto_allocate_chunk_size = auto_allocate_chunk_size;
@@ -152,12 +159,12 @@ impl<'js> ReadableStreamByteController<'js> {
         );
 
         // Let startResult be the result of performing startAlgorithm.
-        let start_result: Value = match start_algorithm {
-            StartAlgorithm::ReturnUndefined => Value::new_undefined(ctx.clone()),
+        let start_result: Result<Value> = match start_algorithm {
+            StartAlgorithm::ReturnUndefined => Ok(Value::new_undefined(ctx.clone())),
             StartAlgorithm::Function {
                 f,
                 underlying_source,
-            } => f.call((This(underlying_source), controller.clone()))?,
+            } => f.call((This(underlying_source), controller.clone())),
         };
 
         // Let startPromise be a promise resolved with startResult.
@@ -228,7 +235,7 @@ impl<'js> ReadableStreamByteController<'js> {
                 panic!("pull algorithm used after ReadableByteStreamControllerClearAlgorithms")
             },
             Some(PullAlgorithm::ReturnPromiseUndefined) => {
-                promise_resolved_with(&ctx, Value::new_undefined(ctx.clone()))?
+                promise_resolved_with(&ctx, Ok(Value::new_undefined(ctx.clone())))?
             },
             Some(PullAlgorithm::Function {
                 ref f,
@@ -548,8 +555,8 @@ impl<'js> ReadableStreamByteController<'js> {
 
                 // Perform ! ReadableStreamFulfillReadRequest(stream, transferredView, false).
                 ReadableStream::readable_stream_fulfill_read_request(
-                    stream.clone(),
-                    transferred_view,
+                    &stream.borrow(),
+                    transferred_view.into_js(ctx)?,
                     false,
                 )?
             }
@@ -579,11 +586,7 @@ impl<'js> ReadableStreamByteController<'js> {
         }
 
         // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
-        Self::readable_byte_stream_controller_call_pull_if_needed(
-            controller,
-            ctx.clone(),
-            stream.clone(),
-        )
+        Self::readable_byte_stream_controller_call_pull_if_needed(controller, ctx.clone(), stream)
     }
 
     fn readable_byte_stream_enqueue_detached_pull_into_to_queue(
@@ -869,14 +872,18 @@ impl<'js> ReadableStreamByteController<'js> {
 
         // Let filledView be ! ReadableByteStreamControllerConvertPullIntoDescriptor(pullIntoDescriptor).
         let filled_view = Self::readable_byte_stream_controller_convert_pull_into_descriptor(
-            ctx,
+            ctx.clone(),
             pull_into_descriptor,
         )?;
 
         if let PullIntoDescriptorReaderType::Default = pull_into_descriptor.reader_type {
             // If pullIntoDescriptor’s reader type is "default",
             // Perform ! ReadableStreamFulfillReadRequest(stream, filledView, done).
-            ReadableStream::readable_stream_fulfill_read_request(stream, filled_view, done)?
+            ReadableStream::readable_stream_fulfill_read_request(
+                &stream.borrow(),
+                filled_view.into_js(&ctx)?,
+                done,
+            )?
         } else {
             // Otherwise,
             // Perform ! ReadableStreamFulfillReadIntoRequest(stream, filledView, done).
@@ -933,6 +940,79 @@ impl<'js> ReadableStreamByteController<'js> {
             bytes_filled / element_size,
         ))?;
         ObjectBytes::from(&ctx, &view)
+    }
+
+    pub(super) fn pull_steps(
+        controller: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        read_request: ReadableStreamReadRequest<'js>,
+    ) -> Result<()> {
+        // Let stream be this.[[stream]].
+        let stream = controller
+            .borrow()
+            .stream
+            .clone()
+            .expect("ReadableStreamByteController pullSteps called without stream");
+
+        // If this.[[queueTotalSize]] > 0,
+        if controller.borrow().queue_total_size > 0 {
+            // Perform ! ReadableByteStreamControllerFillReadRequestFromQueue(this, readRequest).
+            Self::readable_byte_stream_controller_fill_read_request_from_queue(
+                ctx,
+                controller,
+                read_request,
+            )?;
+            // Return.
+            return Ok(());
+        }
+
+        // Let autoAllocateChunkSize be this.[[autoAllocateChunkSize]].
+        let auto_allocate_chunk_size = controller.borrow().auto_allocate_chunk_size;
+
+        // If autoAllocateChunkSize is not undefined,
+        if let Some(auto_allocate_chunk_size) = auto_allocate_chunk_size {
+            // Let buffer be Construct(%ArrayBuffer%, « autoAllocateChunkSize »).
+            let ctor: Constructor = ctx.globals().get(PredefinedAtom::ArrayBuffer)?;
+            let buffer: ArrayBuffer = match ctor.construct((auto_allocate_chunk_size,)) {
+                // If buffer is an abrupt completion,
+                Err(err @ Error::Exception) => {
+                    // Perform readRequest’s error steps, given buffer.[[Value]].
+                    read_request.error_steps.call((ctx.catch(),))?;
+                    return Ok(());
+                },
+                Err(err) => return Err(err),
+                Ok(buffer) => buffer,
+            };
+
+            // Let pullIntoDescriptor be a new pull-into descriptor with...
+            let pull_into_descriptor = PullIntoDescriptor {
+                buffer,
+                buffer_byte_length: auto_allocate_chunk_size,
+                byte_offset: 0,
+                byte_length: auto_allocate_chunk_size,
+                bytes_filled: 0,
+                minimum_fill: 1,
+                element_size: 1,
+                view_constructor: ctx.globals().get(PredefinedAtom::Uint8Array)?,
+                reader_type: PullIntoDescriptorReaderType::Default,
+            };
+
+            // Append pullIntoDescriptor to this.[[pendingPullIntos]].
+            controller
+                .borrow_mut()
+                .pending_pull_intos
+                .push_back(pull_into_descriptor);
+        }
+
+        // Perform ! ReadableStreamAddReadRequest(stream, readRequest).
+        stream
+            .borrow()
+            .readable_stream_add_read_request(read_request);
+
+        // Perform ! ReadableByteStreamControllerCallPullIfNeeded(this).
+        Self::readable_byte_stream_controller_call_pull_if_needed(controller, ctx.clone(), stream)?;
+
+        Ok(())
     }
 }
 
@@ -1044,7 +1124,7 @@ struct ReadableStreamBYOBRequest<'js> {
 
 struct PullIntoDescriptor<'js> {
     buffer: ArrayBuffer<'js>,
-    buffer_byte_length: u64,
+    buffer_byte_length: usize,
     byte_offset: usize,
     byte_length: usize,
     bytes_filled: usize,

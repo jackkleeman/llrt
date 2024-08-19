@@ -104,6 +104,7 @@ impl<'js> ReadableStream<'js> {
 
                 // Perform ? SetUpReadableStreamDefaultControllerFromUnderlyingSource(this, underlyingSource, underlyingSourceDict, highWaterMark, sizeAlgorithm).
                 ReadableStreamDefaultController::set_up_readable_stream_default_controller_from_underlying_source(
+                    ctx,
                     this.clone(),
                     underlying_source,
                     high_water_mark,
@@ -247,16 +248,10 @@ impl<'js> ReadableStream<'js> {
         }
     }
 
-    fn readable_stream_fulfill_read_request(
-        stream: Class<'js, Self>,
-        chunk: ObjectBytes<'js>,
-        done: bool,
-    ) -> Result<()> {
-        let stream = stream.borrow();
-
+    fn readable_stream_fulfill_read_request(&self, chunk: Value<'js>, done: bool) -> Result<()> {
         // Assert: ! ReadableStreamHasDefaultReader(stream) is true.
         // Let reader be stream.[[reader]].
-        let read_requests = match stream.reader {
+        let read_requests = match self.reader {
             Some(ReadableStreamReader::ReadableStreamDefaultReader(ref r)) => &mut r.borrow_mut().read_requests,
             _ => panic!("ReadableStreamFulfillReadRequest called on stream that doesn't satisfy ReadableStreamHasDefaultReader")
         };
@@ -342,6 +337,27 @@ impl<'js> ReadableStream<'js> {
 
         Ok(())
     }
+
+    fn is_readable_stream_locked(&self) -> bool {
+        // If stream.[[reader]] is undefined, return false.
+        if self.reader.is_none() {
+            return false;
+        }
+        // Return true.
+        true
+    }
+
+    fn readable_stream_add_read_request(&self, read_request: ReadableStreamReadRequest<'js>) {
+        match self.reader {
+            None => panic!("ReadableStreamAddReadRequest called without reader"),
+            Some(ReadableStreamReader::ReadableStreamBYOBReader(_)) => {
+                panic!("ReadableStreamAddReadRequest called with byob reader")
+            },
+            Some(ReadableStreamReader::ReadableStreamDefaultReader(ref r)) => {
+                r.borrow_mut().read_requests.push_back(read_request)
+            },
+        }
+    }
 }
 
 struct UnderlyingSource<'js> {
@@ -354,7 +370,7 @@ struct UnderlyingSource<'js> {
     cancel: Option<Function<'js>>,
     r#type: Option<ReadableStreamType>,
     // [EnforceRange] unsigned long long autoAllocateChunkSize;
-    auto_allocate_chunk_size: Option<u64>,
+    auto_allocate_chunk_size: Option<usize>,
 }
 
 impl<'js> FromJs<'js> for UnderlyingSource<'js> {
@@ -462,6 +478,7 @@ impl<'js> QueuingStrategy<'js> {
     }
 }
 
+#[derive(Trace)]
 enum SizeAlgorithm<'js> {
     AlwaysOne,
     SizeFunction(Function<'js>),
@@ -472,7 +489,7 @@ struct ReadableStreamGetReaderOptions {
 }
 
 impl<'js> FromJs<'js> for ReadableStreamGetReaderOptions {
-    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+    fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
         let ty_name = value.type_name();
         let obj = value
             .as_object()
@@ -572,8 +589,25 @@ impl<'js> FromJs<'js> for StreamPipeOptions<'js> {
 
 #[derive(Trace)]
 enum ReadableStreamController<'js> {
-    ReadableStreamDefaultController(ReadableStreamDefaultController),
+    ReadableStreamDefaultController(Class<'js, ReadableStreamDefaultController<'js>>),
     ReadableStreamByteController(Class<'js, ReadableStreamByteController<'js>>),
+}
+
+impl<'js> ReadableStreamController<'js> {
+    fn pull_steps(
+        &self,
+        ctx: &Ctx<'js>,
+        read_request: ReadableStreamReadRequest<'js>,
+    ) -> Result<()> {
+        match self {
+            Self::ReadableStreamDefaultController(c) => {
+                ReadableStreamDefaultController::pull_steps(c.clone(), ctx, read_request)
+            },
+            Self::ReadableStreamByteController(c) => {
+                ReadableStreamByteController::pull_steps(c.clone(), ctx, read_request)
+            },
+        }
+    }
 }
 
 fn transfer_array_buffer<'js>(
@@ -617,9 +651,14 @@ fn copy_data_block_bytes(
     Ok(())
 }
 
-fn promise_resolved_with<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Promise<'js>> {
-    let (promise, resolve, _) = Promise::new(ctx)?;
-    resolve.call((value,))?;
+fn promise_resolved_with<'js>(ctx: &Ctx<'js>, value: Result<Value<'js>>) -> Result<Promise<'js>> {
+    let (promise, resolve, reject) = Promise::new(ctx)?;
+    match value {
+        Ok(value) => resolve.call((value,))?,
+        Err(Error::Exception) => reject.call((ctx.catch(),))?,
+        Err(err) => return Err(err),
+    }
+
     Ok(promise)
 }
 
@@ -644,6 +683,15 @@ enum StartAlgorithm<'js> {
 
 #[derive(Trace)]
 enum PullAlgorithm<'js> {
+    ReturnPromiseUndefined,
+    Function {
+        f: Function<'js>,
+        underlying_source: Object<'js>,
+    },
+}
+
+#[derive(Trace)]
+enum CancelAlgorithm<'js> {
     ReturnPromiseUndefined,
     Function {
         f: Function<'js>,
