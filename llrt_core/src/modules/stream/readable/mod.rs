@@ -1,5 +1,3 @@
-use std::borrow::{Borrow, BorrowMut};
-
 use crate::modules::events::abort_signal::AbortSignal;
 use byob_reader::ReadableStreamBYOBReader;
 use byte_controller::ReadableStreamByteController;
@@ -32,8 +30,6 @@ pub struct ReadableStream<'js> {
     reader: Option<ReadableStreamReader<'js>>,
     stored_error: Option<Value<'js>>,
 }
-
-struct ReadableStreamInner {}
 
 #[derive(Trace, Clone, Copy, PartialEq, Eq)]
 enum ReadableStreamState {
@@ -118,49 +114,60 @@ impl<'js> ReadableStream<'js> {
 
     // static ReadableStream from(any asyncIterable);
     #[qjs(static)]
-    fn from(async_iterable: Value<'js>) -> Class<'js, Self> {
+    fn from(_async_iterable: Value<'js>) -> Class<'js, Self> {
         unimplemented!()
     }
 
     // readonly attribute boolean locked;
     #[qjs(get)]
     fn locked(stream: This<Class<'js, Self>>) -> bool {
-        unimplemented!()
+        // Return ! IsReadableStreamLocked(this).
+        stream.0.borrow().is_readable_stream_locked()
     }
 
     // Promise<undefined> cancel(optional any reason);
-    async fn cancel(stream: This<Class<'js, Self>>, reason: Value<'js>) -> Result<()> {
-        unimplemented!()
+    fn cancel(
+        stream: This<Class<'js, Self>>,
+        ctx: Ctx<'js>,
+        reason: Value<'js>,
+    ) -> Result<Promise<'js>> {
+        // If ! IsReadableStreamLocked(this) is true, return a promise rejected with a TypeError exception.
+        if stream.0.borrow().is_readable_stream_locked() {
+            let e: Value =
+                ctx.eval(r#"new TypeError("Cannot cancel a stream that already has a reader")"#)?;
+            return promise_rejected_with(&ctx, e);
+        }
+        stream.0.borrow_mut().readable_stream_cancel(&ctx, reason)
     }
 
     // ReadableStreamReader getReader(optional ReadableStreamGetReaderOptions options = {});
     fn get_reader(
-        stream: This<Class<'js, Self>>,
-        options: Option<ReadableStreamGetReaderOptions>,
+        _stream: This<Class<'js, Self>>,
+        _options: Option<ReadableStreamGetReaderOptions>,
     ) -> ReadableStreamReader {
         unimplemented!()
     }
 
     // ReadableStream pipeThrough(ReadableWritablePair transform, optional StreamPipeOptions options = {});
     fn pipe_through(
-        stream: This<Class<'js, Self>>,
-        transform: ReadableWritablePair<'js>,
-        options: Option<StreamPipeOptions<'js>>,
+        _stream: This<Class<'js, Self>>,
+        _transform: ReadableWritablePair<'js>,
+        _options: Option<StreamPipeOptions<'js>>,
     ) -> Class<'js, ReadableStream<'js>> {
         unimplemented!()
     }
 
     // Promise<undefined> pipeTo(WritableStream destination, optional StreamPipeOptions options = {});
     async fn pipe_to(
-        stream: This<Class<'js, Self>>,
-        destination: Class<'js, WriteableStream>,
-        options: Option<StreamPipeOptions<'js>>,
+        _stream: This<Class<'js, Self>>,
+        _destination: Class<'js, WriteableStream>,
+        _options: Option<StreamPipeOptions<'js>>,
     ) -> Result<()> {
         unimplemented!()
     }
 
     // sequence<ReadableStream> tee();
-    fn tee(stream: This<Class<'js, Self>>) -> List<(Class<'js, Self>, Class<'js, Self>)> {
+    fn tee(_stream: This<Class<'js, Self>>) -> List<(Class<'js, Self>, Class<'js, Self>)> {
         unimplemented!()
     }
 }
@@ -184,6 +191,8 @@ impl<'js> ReadableStream<'js> {
                 r.borrow()
                     .generic
                     .reject_closed_promise
+                    .as_ref()
+                    .expect("ReadableStreamError called without rejection function")
                     .call((e.clone(),))?;
 
                 // If reader implements ReadableStreamDefaultReader,
@@ -198,6 +207,8 @@ impl<'js> ReadableStream<'js> {
                 r.borrow()
                     .generic
                     .reject_closed_promise
+                    .as_ref()
+                    .expect("ReadableStreamError called without rejection function")
                     .call((e.clone(),))?;
 
                 // Otherwise,
@@ -294,7 +305,7 @@ impl<'js> ReadableStream<'js> {
 
         if done {
             // If done is true, perform readIntoRequest’s close steps, given chunk.
-            read_into_request.close_steps.call(())?;
+            read_into_request.close_steps.call((chunk,))?;
         } else {
             // Otherwise, perform readIntoRequest’s chunk steps, given chunk.
             read_into_request.chunk_steps.call((chunk,))?;
@@ -303,12 +314,11 @@ impl<'js> ReadableStream<'js> {
         Ok(())
     }
 
-    fn readable_stream_close(stream: Class<'js, Self>) -> Result<()> {
-        let mut stream = stream.borrow_mut();
+    fn readable_stream_close(&mut self) -> Result<()> {
         // Set stream.[[state]] to "closed".
-        stream.state = ReadableStreamState::Closed;
+        self.state = ReadableStreamState::Closed;
         // Let reader be stream.[[reader]].
-        let reader = match &stream.reader {
+        let reader = match &self.reader {
             // If reader is undefined, return.
             None => return Ok(()),
             Some(reader) => reader,
@@ -317,7 +327,12 @@ impl<'js> ReadableStream<'js> {
             ReadableStreamReader::ReadableStreamDefaultReader(r) => {
                 let reader = r.borrow();
                 // Resolve reader.[[closedPromise]] with undefined.
-                reader.generic.resolve_closed_promise.call((Undefined,))?;
+                reader
+                    .generic
+                    .resolve_closed_promise
+                    .as_ref()
+                    .expect("ReadableStreamClose called without resolution function")
+                    .call((Undefined,))?;
 
                 // If reader implements ReadableStreamDefaultReader,
                 // Let readRequests be reader.[[readRequests]].
@@ -331,6 +346,8 @@ impl<'js> ReadableStream<'js> {
                 r.borrow()
                     .generic
                     .resolve_closed_promise
+                    .as_ref()
+                    .expect("ReadableStreamClose called without resolution function")
                     .call((Undefined,))?;
             },
         }
@@ -355,6 +372,60 @@ impl<'js> ReadableStream<'js> {
             },
             Some(ReadableStreamReader::ReadableStreamDefaultReader(ref r)) => {
                 r.borrow_mut().read_requests.push_back(read_request)
+            },
+        }
+    }
+
+    fn readable_stream_cancel(
+        &mut self,
+        ctx: &Ctx<'js>,
+        reason: Value<'js>,
+    ) -> Result<Promise<'js>> {
+        // Set stream.[[disturbed]] to true.
+        self.disturbed = true;
+
+        match self.state {
+            // If stream.[[state]] is "closed", return a promise resolved with undefined.
+            ReadableStreamState::Closed => {
+                return promise_resolved_with(ctx, Ok(Value::new_undefined(ctx.clone())));
+            },
+            // If stream.[[state]] is "errored", return a promise rejected with stream.[[storedError]].
+            ReadableStreamState::Errored => {
+                return promise_rejected_with(
+                    ctx,
+                    self.stored_error
+                        .clone()
+                        .expect("ReadableStream in errored state without a stored error"),
+                );
+            },
+            ReadableStreamState::Readable => {
+                // Perform ! ReadableStreamClose(stream).
+                self.readable_stream_close()?;
+                // Let reader be stream.[[reader]].
+                let reader = &self.reader;
+                if let Some(ReadableStreamReader::ReadableStreamBYOBReader(r)) = reader {
+                    // Let readIntoRequests be reader.[[readIntoRequests]].
+                    // Set reader.[[readIntoRequests]] to an empty list.
+                    let read_into_requests = r.borrow_mut().read_into_requests.split_off(0);
+                    // For each readIntoRequest of readIntoRequests,
+                    for read_into_request in read_into_requests {
+                        // Perform readIntoRequest’s close steps, given undefined.
+                        read_into_request.close_steps.call((Undefined,))?
+                    }
+                }
+
+                let controller = self
+                    .controller
+                    .clone()
+                    .expect("ReadableStreamCancel called without a controller");
+
+                // Let sourceCancelPromise be ! stream.[[controller]].[[CancelSteps]](reason).
+                let source_cancel_promise = controller.cancel_steps(ctx, reason)?;
+
+                // Return the result of reacting to sourceCancelPromise with a fulfillment step that returns undefined.
+                source_cancel_promise
+                    .then()?
+                    .call((Function::new(ctx.clone(), || Undefined)?,))
             },
         }
     }
@@ -521,10 +592,60 @@ impl<'js> FromJs<'js> for ReadableStreamReaderMode {
 }
 
 pub struct ReadableStreamGenericReader<'js> {
-    resolve_closed_promise: Function<'js>,
-    reject_closed_promise: Function<'js>,
+    resolve_closed_promise: Option<Function<'js>>,
+    reject_closed_promise: Option<Function<'js>>,
     closed_promise: Promise<'js>,
     stream: Class<'js, ReadableStream<'js>>,
+}
+
+impl<'js> ReadableStreamGenericReader<'js> {
+    fn readable_stream_generic_initialize(
+        ctx: &Ctx<'js>,
+        stream: Class<'js, ReadableStream<'js>>,
+    ) -> Result<Self> {
+        let (closed_promise, resolve_closed_promise, reject_closed_promise) =
+            match stream.borrow().state {
+                // If stream.[[state]] is "readable",
+                ReadableStreamState::Readable => {
+                    // Set reader.[[closedPromise]] to a new promise.
+                    let (promise, resolve, reject) = Promise::new(ctx)?;
+                    (promise, Some(resolve), Some(reject))
+                },
+                // Otherwise, if stream.[[state]] is "closed",
+                ReadableStreamState::Closed => {
+                    // Set reader.[[closedPromise]] to a promise resolved with undefined.
+                    (
+                        promise_resolved_with(ctx, Ok(Value::new_undefined(ctx.clone())))?,
+                        None,
+                        None,
+                    )
+                },
+                // Otherwise,
+                ReadableStreamState::Errored => {
+                    // Set reader.[[closedPromise]] to a promise rejected with stream.[[storedError]].
+                    // Set reader.[[closedPromise]].[[PromiseIsHandled]] to true.
+                    (
+                        promise_rejected_with(
+                            ctx,
+                            stream
+                                .borrow()
+                                .stored_error
+                                .clone()
+                                .expect("ReadableStream in errored state without a stored error"),
+                        )?,
+                        None,
+                        None,
+                    )
+                },
+            };
+        Ok(Self {
+            // Set reader.[[stream]] to stream.
+            stream,
+            resolve_closed_promise,
+            reject_closed_promise,
+            closed_promise,
+        })
+    }
 }
 
 impl<'js> Trace<'js> for ReadableStreamGenericReader<'js> {
@@ -587,7 +708,7 @@ impl<'js> FromJs<'js> for StreamPipeOptions<'js> {
     }
 }
 
-#[derive(Trace)]
+#[derive(Trace, Clone)]
 enum ReadableStreamController<'js> {
     ReadableStreamDefaultController(Class<'js, ReadableStreamDefaultController<'js>>),
     ReadableStreamByteController(Class<'js, ReadableStreamByteController<'js>>),
@@ -605,6 +726,17 @@ impl<'js> ReadableStreamController<'js> {
             },
             Self::ReadableStreamByteController(c) => {
                 ReadableStreamByteController::pull_steps(c.clone(), ctx, read_request)
+            },
+        }
+    }
+
+    fn cancel_steps(&self, ctx: &Ctx<'js>, reason: Value<'js>) -> Result<Promise<'js>> {
+        match self {
+            Self::ReadableStreamDefaultController(c) => {
+                ReadableStreamDefaultController::cancel_steps(c.clone(), ctx, reason)
+            },
+            Self::ReadableStreamByteController(c) => {
+                ReadableStreamByteController::cancel_steps(c.clone(), ctx, reason)
             },
         }
     }
@@ -658,6 +790,13 @@ fn promise_resolved_with<'js>(ctx: &Ctx<'js>, value: Result<Value<'js>>) -> Resu
         Err(Error::Exception) => reject.call((ctx.catch(),))?,
         Err(err) => return Err(err),
     }
+
+    Ok(promise)
+}
+
+fn promise_rejected_with<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Promise<'js>> {
+    let (promise, _, reject) = Promise::new(ctx)?;
+    reject.call((value,))?;
 
     Ok(promise)
 }

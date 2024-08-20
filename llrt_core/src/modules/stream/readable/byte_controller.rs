@@ -7,7 +7,7 @@ use llrt_utils::{
 };
 use rquickjs::{
     atom::PredefinedAtom, class::Trace, function::Constructor, prelude::This, ArrayBuffer, Class,
-    Ctx, Error, Exception, Function, IntoJs, Object, Result, TypedArray, Value,
+    Ctx, Error, Exception, Function, IntoJs, Object, Promise, Result, TypedArray, Value,
 };
 
 use super::{
@@ -908,7 +908,7 @@ impl<'js> ReadableStreamByteController<'js> {
             // Perform ! ReadableByteStreamControllerClearAlgorithms(controller).
             controller_mut.readable_byte_stream_controller_clear_algorithms();
             // Perform ! ReadableStreamClose(controller.[[stream]]).
-            ReadableStream::readable_stream_close(stream)?;
+            stream.borrow_mut().readable_stream_close()?;
         } else {
             drop(controller_mut);
             // Otherwise,
@@ -975,7 +975,7 @@ impl<'js> ReadableStreamByteController<'js> {
             let ctor: Constructor = ctx.globals().get(PredefinedAtom::ArrayBuffer)?;
             let buffer: ArrayBuffer = match ctor.construct((auto_allocate_chunk_size,)) {
                 // If buffer is an abrupt completion,
-                Err(err @ Error::Exception) => {
+                Err(Error::Exception) => {
                     // Perform readRequest’s error steps, given buffer.[[Value]].
                     read_request.error_steps.call((ctx.catch(),))?;
                     return Ok(());
@@ -1013,6 +1013,42 @@ impl<'js> ReadableStreamByteController<'js> {
         Self::readable_byte_stream_controller_call_pull_if_needed(controller, ctx.clone(), stream)?;
 
         Ok(())
+    }
+
+    pub(super) fn cancel_steps(
+        controller: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        reason: Value<'js>,
+    ) -> Result<Promise<'js>> {
+        // Perform ! ReadableByteStreamControllerClearPendingPullIntos(this).
+        controller
+            .borrow_mut()
+            .readable_byte_stream_controller_clear_pending_pull_intos();
+
+        // Perform ! ResetQueue(this).
+        controller.borrow_mut().reset_queue();
+
+        // Let result be the result of performing this.[[cancelAlgorithm]], passing in reason.
+        let result = match controller.borrow().cancel_algorithm {
+            None => {
+                panic!("cancel algorithm used after ReadableStreamByteControllerClearAlgorithms")
+            },
+            Some(CancelAlgorithm::ReturnPromiseUndefined) => {
+                promise_resolved_with(ctx, Ok(Value::new_undefined(ctx.clone())))?
+            },
+            Some(CancelAlgorithm::Function {
+                ref f,
+                ref underlying_source,
+            }) => f.call((This(underlying_source.clone()), reason))?,
+        };
+
+        // Perform ! ReadableByteStreamControllerClearAlgorithms(this).
+        controller
+            .borrow_mut()
+            .readable_byte_stream_controller_clear_algorithms();
+
+        // Return result.
+        Ok(result)
     }
 }
 

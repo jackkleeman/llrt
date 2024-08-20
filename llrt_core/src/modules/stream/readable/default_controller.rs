@@ -1,7 +1,8 @@
-use std::{borrow::Borrow, collections::VecDeque};
+use std::collections::VecDeque;
 
 use rquickjs::{
-    class::Trace, methods, prelude::This, Class, Ctx, Error, Exception, Function, Result, Value,
+    class::Trace, methods, prelude::This, Class, Ctx, Error, Exception, Function, Promise, Result,
+    Value,
 };
 
 use crate::modules::stream::readable::{CancelAlgorithm, PullAlgorithm, StartAlgorithm};
@@ -364,7 +365,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
             .expect("ReadableStreamDefaultControllerGetDesiredSize called without stream");
         let stream = stream.borrow();
         // Let state be controller.[[stream]].[[state]].
-        match stream.borrow().state {
+        match stream.state {
             // If state is "errored", return null.
             ReadableStreamState::Errored => None,
             // If state is "closed", return 0.
@@ -391,9 +392,10 @@ impl<'js> ReadableStreamDefaultController<'js> {
             // Perform ! ReadableStreamDefaultControllerClearAlgorithms(controller).
             self.readable_stream_default_controller_clear_algorithms();
             // Perform ! ReadableStreamClose(stream).
-            ReadableStream::readable_stream_close(
-                stream.expect("ReadableStreamDefaultControllerClose called without stream"),
-            )?;
+            stream
+                .expect("ReadableStreamDefaultControllerClose called without stream")
+                .borrow_mut()
+                .readable_stream_close()?;
         }
 
         Ok(())
@@ -422,7 +424,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
             let stream = stream.borrow();
 
             // If ! IsReadableStreamLocked(stream) is true and ! ReadableStreamGetNumReadRequests(stream) > 0, perform ! ReadableStreamFulfillReadRequest(stream, chunk, false).
-            if stream.borrow().is_readable_stream_locked()
+            if stream.is_readable_stream_locked()
                 && stream.readable_stream_get_num_read_requests() > 0
             {
                 stream.readable_stream_fulfill_read_request(chunk, false)?;
@@ -558,6 +560,37 @@ impl<'js> ReadableStreamDefaultController<'js> {
         }
 
         Ok(())
+    }
+
+    pub(super) fn cancel_steps(
+        controller: Class<'js, Self>,
+        ctx: &Ctx<'js>,
+        reason: Value<'js>,
+    ) -> Result<Promise<'js>> {
+        // Perform ! ResetQueue(this).
+        controller.borrow_mut().reset_queue();
+
+        // Let result be the result of performing this.[[cancelAlgorithm]], passing reason.
+        let result = match controller.borrow().cancel_algorithm {
+            None => {
+                panic!("cancel algorithm used after ReadableStreamDefaultControllerClearAlgorithms")
+            },
+            Some(CancelAlgorithm::ReturnPromiseUndefined) => {
+                promise_resolved_with(ctx, Ok(Value::new_undefined(ctx.clone())))?
+            },
+            Some(CancelAlgorithm::Function {
+                ref f,
+                ref underlying_source,
+            }) => f.call((This(underlying_source.clone()), reason))?,
+        };
+
+        // Perform ! ReadableStreamDefaultControllerClearAlgorithms(this).
+        controller
+            .borrow_mut()
+            .readable_stream_default_controller_clear_algorithms();
+
+        // Return result.
+        Ok(result)
     }
 }
 
