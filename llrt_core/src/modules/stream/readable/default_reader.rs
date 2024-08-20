@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use rquickjs::{
-    class::Trace, methods, prelude::This, Class, Ctx, Exception, Function, IntoJs, Object, Promise,
+    class::Trace, methods, Class, Ctx, Exception, Function, IntoJs, Object, Promise,
     Result, Value,
 };
 
@@ -18,11 +18,11 @@ pub(super) struct ReadableStreamDefaultReader<'js> {
 
 impl<'js> ReadableStreamDefaultReader<'js> {
     pub(super) fn readable_stream_default_reader_error_read_requests(
-        reader: Class<'js, Self>,
+        &mut self,
         e: Value<'js>,
     ) -> Result<()> {
         // Let readRequests be reader.[[readRequests]].
-        let read_requests = &mut reader.borrow_mut().read_requests;
+        let read_requests = &mut self.read_requests;
 
         // Set reader.[[readRequests]] to a new empty list.
         let read_requests = read_requests.split_off(0);
@@ -102,7 +102,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         Self::set_up_readable_stream_default_reader(&ctx, stream)
     }
 
-    fn read(reader: This<Class<'js, Self>>, ctx: Ctx<'js>) -> Result<Promise<'js>> {
+    fn read(&self, ctx: Ctx<'js>) -> Result<Promise<'js>> {
         // If this.[[stream]] is undefined, return a promise rejected with a TypeError exception.
         // this is not currently possible in this type system
 
@@ -143,9 +143,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         };
 
         // Perform ! ReadableStreamDefaultReaderRead(this, readRequest).
-        reader
-            .borrow()
-            .readable_stream_default_reader_read(&ctx, read_request)?;
+        self.readable_stream_default_reader_read(&ctx, read_request)?;
 
         // Return promise.
         Ok(promise)

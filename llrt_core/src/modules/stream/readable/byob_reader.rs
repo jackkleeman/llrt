@@ -1,4 +1,7 @@
-use rquickjs::{class::Trace, Class, Function, Result, Value};
+use llrt_utils::{bytes::ObjectBytes, object::ObjectExt};
+use rquickjs::{
+    class::Trace, methods, Class, Ctx, Error, FromJs, Function, Promise, Result, Value,
+};
 use std::collections::VecDeque;
 
 use super::ReadableStreamGenericReader;
@@ -12,11 +15,11 @@ pub(super) struct ReadableStreamBYOBReader<'js> {
 
 impl<'js> ReadableStreamBYOBReader<'js> {
     pub(super) fn readable_stream_byob_reader_error_read_into_requests(
-        reader: Class<'js, Self>,
+        &mut self,
         e: Value<'js>,
     ) -> Result<()> {
         // Let readIntoRequests be reader.[[readIntoRequests]].
-        let read_into_requests = &mut reader.borrow_mut().read_into_requests;
+        let read_into_requests = &mut self.read_into_requests;
 
         // Set reader.[[readIntoRequests]] to a new empty list.
         let read_into_requests = read_into_requests.split_off(0);
@@ -27,6 +30,39 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         }
 
         Ok(())
+    }
+}
+
+#[methods]
+impl<'js> ReadableStreamBYOBReader<'js> {
+    #[qjs(constructor)]
+    fn new() -> Result<Class<'js, Self>> {
+        unimplemented!()
+    }
+
+    fn read(
+        &self,
+        view: ObjectBytes<'js>,
+        options: Option<ReadableStreamBYOBReaderReadOptions>,
+    ) -> Promise<'js> {
+        unimplemented!()
+    }
+}
+
+struct ReadableStreamBYOBReaderReadOptions {
+    min: u64,
+}
+
+impl<'js> FromJs<'js> for ReadableStreamBYOBReaderReadOptions {
+    fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+        let ty_name = value.type_name();
+        let obj = value
+            .as_object()
+            .ok_or(Error::new_from_js(ty_name, "Object"))?;
+
+        let min = obj.get_optional::<_, _>("min")?.unwrap_or(1);
+
+        Ok(Self { min })
     }
 }
 
