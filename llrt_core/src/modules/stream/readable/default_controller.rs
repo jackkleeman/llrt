@@ -170,7 +170,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                     // Upon rejection of startPromise with reason r,
                     Err(r) => {
                         // Perform ! ReadableByteStreamControllerError(controller, r).
-                        controller_mut.readable_stream_default_controller_error(r)
+                        controller_mut.readable_stream_default_controller_error(&ctx, r)
                     },
                 }
             }
@@ -253,7 +253,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                     // Upon rejection of pullPromise with reason e,
                     Err(e) => {
                         // Perform ! ReadableStreamDefaultControllerError(controller, e).
-                        controller_mut.readable_stream_default_controller_error(e)
+                        controller_mut.readable_stream_default_controller_error(&ctx, e)
                     },
                 }
             }
@@ -262,7 +262,11 @@ impl<'js> ReadableStreamDefaultController<'js> {
         Ok(())
     }
 
-    fn readable_stream_default_controller_error(&mut self, e: Value<'js>) -> Result<()> {
+    fn readable_stream_default_controller_error(
+        &mut self,
+        ctx: &Ctx<'js>,
+        e: Value<'js>,
+    ) -> Result<()> {
         // Let stream be controller.[[stream]].
         let stream = self.stream.clone();
         let stream = match stream {
@@ -278,7 +282,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
         self.readable_stream_default_controller_clear_algorithms();
 
         // Perform ! ReadableStreamError(stream, e).
-        stream.borrow_mut().readable_stream_error(e)?;
+        stream.borrow_mut().readable_stream_error(ctx, e)?;
 
         Ok(())
     }
@@ -426,7 +430,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                     // If result is an abrupt completion,
                     Err(err @ Error::Exception) => {
                         // Perform ! ReadableStreamDefaultControllerError(controller, result.[[Value]]).
-                        self.readable_stream_default_controller_error(ctx.catch())?;
+                        self.readable_stream_default_controller_error(&ctx, ctx.catch())?;
                         return Err(err);
                     },
                     // Let chunkSize be result.[[Value]].
@@ -438,7 +442,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                             // If enqueueResult is an abrupt completion,
                             Err(err @ Error::Exception) => {
                                 // Perform ! ReadableStreamDefaultControllerError(controller, enqueueResult.[[Value]]).
-                                self.readable_stream_default_controller_error(ctx.catch())?;
+                                self.readable_stream_default_controller_error(&ctx, ctx.catch())?;
                                 return Err(err);
                             },
                             Err(err) => return Err(err),
@@ -571,6 +575,8 @@ impl<'js> ReadableStreamDefaultController<'js> {
         // Return result.
         Ok(result)
     }
+
+    pub(super) fn release_steps(&mut self) {}
 }
 
 #[methods]
@@ -615,9 +621,9 @@ impl<'js> ReadableStreamDefaultController<'js> {
     }
 
     // undefined error(optional any e);
-    fn error(&mut self, e: Value<'js>) -> Result<()> {
+    fn error(&mut self, ctx: Ctx<'js>, e: Value<'js>) -> Result<()> {
         // Perform ! ReadableStreamDefaultControllerError(this, e).
-        self.readable_stream_default_controller_error(e)
+        self.readable_stream_default_controller_error(&ctx, e)
     }
 }
 

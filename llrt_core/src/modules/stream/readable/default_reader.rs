@@ -1,12 +1,10 @@
 use std::collections::VecDeque;
 
-use rquickjs::{
-    class::Trace, methods, Class, Ctx, Exception, Function, IntoJs, Object, Promise,
-    Result, Value,
-};
+use rquickjs::{class::Trace, methods, Class, Ctx, Exception, Function, Promise, Result, Value};
 
 use super::{
-    ReadableStream, ReadableStreamGenericReader, ReadableStreamReadRequest, ReadableStreamState,
+    promise_rejected_with, ReadableStream, ReadableStreamGenericReader, ReadableStreamReadRequest,
+    ReadableStreamReadResult, ReadableStreamState,
 };
 
 #[derive(Trace)]
@@ -41,7 +39,13 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         read_request: ReadableStreamReadRequest<'js>,
     ) -> Result<()> {
         // Let stream be reader.[[stream]].
-        let stream = self.generic.stream.clone();
+        let stream = self
+            .generic
+            .stream
+            .clone()
+            // Assert: stream is not undefined.
+            .expect("ReadableStreamDefaultReaderRead called without stream");
+
         let mut stream = stream.borrow_mut();
         // Set stream.[[disturbed]] to true.
         stream.disturbed = true;
@@ -81,7 +85,8 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         }
 
         // Perform ! ReadableStreamReaderGenericInitialize(reader, stream).
-        let generic = ReadableStreamGenericReader::readable_stream_generic_initialize(ctx, stream)?;
+        let generic =
+            ReadableStreamGenericReader::readable_stream_reader_generic_initialize(ctx, stream)?;
 
         Class::instance(
             ctx.clone(),
@@ -104,7 +109,11 @@ impl<'js> ReadableStreamDefaultReader<'js> {
 
     fn read(&self, ctx: Ctx<'js>) -> Result<Promise<'js>> {
         // If this.[[stream]] is undefined, return a promise rejected with a TypeError exception.
-        // this is not currently possible in this type system
+        if self.generic.stream.is_none() {
+            let e: Value =
+                ctx.eval(r#"new TypeError("Cannot read from a stream using a released reader")"#)?;
+            return promise_rejected_with(&ctx, e);
+        }
 
         // Let promise be a new promise.
         let (promise, resolve, reject) = Promise::new(&ctx)?;
@@ -116,7 +125,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
             chunk_steps: Function::new(ctx.clone(), {
                 let resolve = resolve.clone();
                 move |chunk: Value<'js>| -> Result<()> {
-                    resolve.call((ReadResult {
+                    resolve.call((ReadableStreamReadResult {
                         value: chunk,
                         done: false,
                     },))
@@ -128,7 +137,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
                 let resolve = resolve.clone();
                 let ctx = ctx.clone();
                 move || -> Result<()> {
-                    resolve.call((ReadResult {
+                    resolve.call((ReadableStreamReadResult {
                         value: Value::new_undefined(ctx.clone()),
                         done: true,
                     },))
@@ -147,19 +156,5 @@ impl<'js> ReadableStreamDefaultReader<'js> {
 
         // Return promise.
         Ok(promise)
-    }
-}
-
-struct ReadResult<'js> {
-    value: Value<'js>,
-    done: bool,
-}
-
-impl<'js> IntoJs<'js> for ReadResult<'js> {
-    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
-        let obj = Object::new(ctx.clone())?;
-        obj.set("value", self.value)?;
-        obj.set("done", self.done)?;
-        Ok(obj.into_value())
     }
 }

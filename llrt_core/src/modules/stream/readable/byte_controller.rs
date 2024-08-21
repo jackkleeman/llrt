@@ -11,10 +11,10 @@ use rquickjs::{
 };
 
 use super::{
-    copy_data_block_bytes, promise_resolved_with, transfer_array_buffer, upon_promise,
-    CancelAlgorithm, PullAlgorithm, ReadableStream, ReadableStreamController,
-    ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamState, StartAlgorithm,
-    UnderlyingSource,
+    byob_reader::ReadableStreamReadIntoRequest, copy_data_block_bytes, promise_resolved_with,
+    transfer_array_buffer, upon_promise, CancelAlgorithm, PullAlgorithm, ReadableStream,
+    ReadableStreamController, ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamState,
+    StartAlgorithm, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]
@@ -192,7 +192,7 @@ impl<'js> ReadableStreamByteController<'js> {
                     // Perform ! ReadableByteStreamControllerError(controller, r).
                     controller
                         .borrow_mut()
-                        .readable_byte_stream_controller_error(r)
+                        .readable_byte_stream_controller_error(&ctx, r)
                 },
             }
         })?;
@@ -259,7 +259,7 @@ impl<'js> ReadableStreamByteController<'js> {
                     };
                     Ok(())
                 },
-                Err(e) => controller_mut.readable_byte_stream_controller_error(e),
+                Err(e) => controller_mut.readable_byte_stream_controller_error(&ctx, e),
             }
         })?;
 
@@ -318,7 +318,11 @@ impl<'js> ReadableStreamByteController<'js> {
         false
     }
 
-    fn readable_byte_stream_controller_error(&mut self, e: Value<'js>) -> Result<()> {
+    fn readable_byte_stream_controller_error(
+        &mut self,
+        ctx: &Ctx<'js>,
+        e: Value<'js>,
+    ) -> Result<()> {
         // Let stream be controller.[[stream]].
         let stream = self.stream.clone();
         let stream = match stream {
@@ -337,7 +341,7 @@ impl<'js> ReadableStreamByteController<'js> {
         self.readable_byte_stream_controller_clear_algorithms();
 
         // Perform ! ReadableStreamError(stream, e).
-        stream.borrow_mut().readable_stream_error(e)?;
+        stream.borrow_mut().readable_stream_error(ctx, e)?;
 
         Ok(())
     }
@@ -418,7 +422,7 @@ impl<'js> ReadableStreamByteController<'js> {
                 let e: Value = ctx.eval(
                     r#"new TypeError("Insufficient bytes to fill elements in the given buffer")"#,
                 )?;
-                self.readable_byte_stream_controller_error(e.clone())?;
+                self.readable_byte_stream_controller_error(ctx, e.clone())?;
                 return Err(ctx.throw(e));
             }
         }
@@ -645,12 +649,12 @@ impl<'js> ReadableStreamByteController<'js> {
             }
 
             // Let pullIntoDescriptor be controller.[[pendingPullIntos]][0].
-            let pull_into_descriptor_index = 0;
+            let pull_into_descriptor_ref = PullIntoDescriptorRef::Index(0);
 
             // If ! ReadableByteStreamControllerFillPullIntoDescriptorFromQueue(controller, pullIntoDescriptor) is true,
             if self.readable_byte_stream_controller_fill_pull_into_descriptor_from_queue(
                 ctx,
-                pull_into_descriptor_index,
+                pull_into_descriptor_ref,
             )? {
                 // Perform ! ReadableByteStreamControllerShiftPendingPullInto(controller).
                 let pull_into_descriptor =
@@ -683,7 +687,7 @@ impl<'js> ReadableStreamByteController<'js> {
         ) {
             Ok(clone_result) => clone_result,
             Err(err) => {
-                self.readable_byte_stream_controller_error(ctx.catch())?;
+                self.readable_byte_stream_controller_error(&ctx, ctx.catch())?;
                 return Err(err);
             },
         };
@@ -731,12 +735,15 @@ impl<'js> ReadableStreamByteController<'js> {
         Ok(())
     }
 
-    fn readable_byte_stream_controller_fill_pull_into_descriptor_from_queue(
+    fn readable_byte_stream_controller_fill_pull_into_descriptor_from_queue<'a>(
         &mut self,
         ctx: &Ctx<'js>,
-        pull_into_descriptor_index: usize,
+        pull_into_descriptor_ref: PullIntoDescriptorRef<'js, 'a>,
     ) -> Result<bool> {
-        let pull_into_descriptor = &self.pending_pull_intos[pull_into_descriptor_index];
+        let pull_into_descriptor = match &pull_into_descriptor_ref {
+            PullIntoDescriptorRef::Index(i) => &self.pending_pull_intos[*i],
+            PullIntoDescriptorRef::Owned(d) => d,
+        };
         // Let maxBytesToCopy be min(controller.[[queueTotalSize]], pullIntoDescriptor’s byte length − pullIntoDescriptor’s bytes filled).
         let max_bytes_to_copy = std::cmp::min(
             self.queue_total_size,
@@ -993,6 +1000,196 @@ impl<'js> ReadableStreamByteController<'js> {
         // Return result.
         Ok(result)
     }
+
+    pub(super) fn release_steps(&mut self) {
+        // If this.[[pendingPullIntos]] is not empty,
+        if !self.pending_pull_intos.is_empty() {
+            // Let firstPendingPullInto be this.[[pendingPullIntos]][0].
+            let first_pending_pull_into = &mut self.pending_pull_intos[0];
+
+            // Set firstPendingPullInto’s reader type to "none".
+            first_pending_pull_into.reader_type = PullIntoDescriptorReaderType::None;
+
+            // Set this.[[pendingPullIntos]] to the list « firstPendingPullInto ».
+            _ = self.pending_pull_intos.split_off(1);
+        }
+    }
+
+    pub(super) fn readable_byte_stream_controller_pull_into(
+        &mut self,
+        ctx: &Ctx<'js>,
+        controller: Class<'js, Self>,
+        view: ObjectBytes<'js>,
+        min: usize,
+        read_into_request: ReadableStreamReadIntoRequest<'js>,
+    ) -> Result<()> {
+        // Let stream be controller.[[stream]].
+        let stream = self
+            .stream
+            .clone()
+            .expect("ReadableByteStreamControllerPullInto called without stream");
+
+        // Set elementSize to the element size specified in the typed array constructors table for view.[[TypedArrayName]].
+        let (element_size, atom) = match view {
+            ObjectBytes::U8Array(_) => (1, PredefinedAtom::Uint8Array),
+            ObjectBytes::I8Array(_) => (1, PredefinedAtom::Int8Array),
+            ObjectBytes::U16Array(_) => (2, PredefinedAtom::Uint16Array),
+            ObjectBytes::I16Array(_) => (2, PredefinedAtom::Int16Array),
+            ObjectBytes::U32Array(_) => (4, PredefinedAtom::Uint32Array),
+            ObjectBytes::I32Array(_) => (4, PredefinedAtom::Int32Array),
+            ObjectBytes::U64Array(_) => (8, PredefinedAtom::BigUint64Array),
+            ObjectBytes::I64Array(_) => (8, PredefinedAtom::BigInt64Array),
+            ObjectBytes::F32Array(_) => (4, PredefinedAtom::Float32Array),
+            ObjectBytes::F64Array(_) => (8, PredefinedAtom::Float64Array),
+            ObjectBytes::DataView(_) => (1, PredefinedAtom::DataView),
+            ObjectBytes::Vec(_) => panic!("ReadableByteStreamControllerPullInto called with view that is neither typed array nor dataview"),
+        };
+
+        // Set ctor to the constructor specified in the typed array constructors table for view.[[TypedArrayName]].
+        let ctor: Constructor = ctx.globals().get(atom)?;
+
+        // Let minimumFill be min × elementSize.
+        let minimum_fill = min * element_size;
+
+        // Let byteOffset be view.[[ByteOffset]].
+        // Let byteLength be view.[[ByteLength]].
+        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?.unwrap();
+
+        // Let bufferResult be TransferArrayBuffer(view.[[ViewedArrayBuffer]]).
+        let buffer_result = transfer_array_buffer(ctx.clone(), buffer);
+        let buffer = match buffer_result {
+            // If bufferResult is an abrupt completion,
+            Err(Error::Exception) => {
+                // Perform readIntoRequest’s error steps, given bufferResult.[[Value]].
+                read_into_request.error_steps.call((ctx.catch(),))?;
+                // Return.
+                return Ok(());
+            },
+            Err(err) => return Err(err),
+            // Let buffer be bufferResult.[[Value]].
+            Ok(buffer) => buffer,
+        };
+
+        let buffer_byte_length = buffer.len();
+        // Let pullIntoDescriptor be a new pull-into descriptor with
+        let pull_into_descriptor = PullIntoDescriptor {
+            buffer,
+            buffer_byte_length,
+            byte_offset,
+            byte_length,
+            bytes_filled: 0,
+            minimum_fill,
+            element_size,
+            view_constructor: ctor.clone(),
+            reader_type: PullIntoDescriptorReaderType::Byob,
+        };
+
+        // If controller.[[pendingPullIntos]] is not empty,
+        if !self.pending_pull_intos.is_empty() {
+            // Append pullIntoDescriptor to controller.[[pendingPullIntos]].
+            self.pending_pull_intos.push_back(pull_into_descriptor);
+
+            // Perform ! ReadableStreamAddReadIntoRequest(stream, readIntoRequest).
+            stream
+                .borrow_mut()
+                .readable_stream_add_read_into_request(read_into_request);
+
+            // Return.
+            return Ok(());
+        }
+
+        // If stream.[[state]] is "closed",
+        if let ReadableStreamState::Closed = stream.borrow().state {
+            // Let emptyView be ! Construct(ctor, « pullIntoDescriptor’s buffer, pullIntoDescriptor’s byte offset, 0 »).
+            let empty_view: Value<'js> = ctor.call((
+                pull_into_descriptor.buffer,
+                pull_into_descriptor.byte_offset,
+                0,
+            ))?;
+
+            // Perform readIntoRequest’s close steps, given emptyView.
+            read_into_request.close_steps.call((empty_view,))?;
+
+            // Return.
+            return Ok(());
+        }
+
+        // If controller.[[queueTotalSize]] > 0,
+        if self.queue_total_size > 0 {
+            // If ! ReadableByteStreamControllerFillPullIntoDescriptorFromQueue(controller, pullIntoDescriptor) is true,
+            if self.readable_byte_stream_controller_fill_pull_into_descriptor_from_queue(
+                ctx,
+                PullIntoDescriptorRef::Owned(&pull_into_descriptor),
+            )? {
+                // Let filledView be ! ReadableByteStreamControllerConvertPullIntoDescriptor(pullIntoDescriptor).
+                let filled_view = self.readable_byte_steam_controller_convert_pull_into_descriptor(
+                    ctx.clone(),
+                    pull_into_descriptor,
+                );
+
+                // Perform ! ReadableByteStreamControllerHandleQueueDrain(controller).
+                self.readable_byte_stream_controller_handle_queue_drain(ctx, controller)?;
+
+                // Perform readIntoRequest’s chunk steps, given filledView.
+                read_into_request.chunk_steps.call((filled_view,))?;
+
+                // Return.
+                return Ok(());
+            }
+
+            // If controller.[[closeRequested]] is true,
+            if self.close_requested {
+                // Let e be a TypeError exception.
+                let e: Value = ctx.eval(
+                    r#"new TypeError("Insufficient bytes to fill elements in the given buffer")"#,
+                )?;
+
+                // Perform ! ReadableByteStreamControllerError(controller, e).
+                self.readable_byte_stream_controller_error(ctx, e.clone())?;
+
+                // Perform readIntoRequest’s error steps, given e.
+                read_into_request.error_steps.call((e,))?;
+
+                // Return.
+                return Ok(());
+            }
+        }
+
+        // Append pullIntoDescriptor to controller.[[pendingPullIntos]].
+        self.pending_pull_intos.push_back(pull_into_descriptor);
+
+        // Perform ! ReadableStreamAddReadIntoRequest(stream, readIntoRequest).
+        stream
+            .borrow_mut()
+            .readable_stream_add_read_into_request(read_into_request);
+
+        // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
+        self.readable_byte_stream_controller_call_pull_if_needed(ctx.clone(), controller, stream)?;
+
+        Ok(())
+    }
+
+    fn readable_byte_steam_controller_convert_pull_into_descriptor(
+        &mut self,
+        ctx: Ctx<'js>,
+        pull_into_descriptor: PullIntoDescriptor<'js>,
+    ) -> Result<Value<'js>> {
+        // Let bytesFilled be pullIntoDescriptor’s bytes filled.
+        let bytes_filled = pull_into_descriptor.bytes_filled;
+
+        // Let elementSize be pullIntoDescriptor’s element size.
+        let element_size = pull_into_descriptor.element_size;
+
+        // Let buffer be ! TransferArrayBuffer(pullIntoDescriptor’s buffer).
+        let buffer = transfer_array_buffer(ctx, pull_into_descriptor.buffer)?;
+
+        // Return ! Construct(pullIntoDescriptor’s view constructor, « buffer, pullIntoDescriptor’s byte offset, bytesFilled ÷ elementSize »).
+        pull_into_descriptor.view_constructor.call((
+            buffer,
+            pull_into_descriptor.byte_offset,
+            bytes_filled / element_size,
+        ))
+    }
 }
 
 #[rquickjs::methods(rename_all = "camelCase")]
@@ -1081,9 +1278,9 @@ impl<'js> ReadableStreamByteController<'js> {
     }
 
     // undefined error(optional any e);
-    fn error(&mut self, e: Value<'js>) -> Result<()> {
+    fn error(&mut self, ctx: Ctx<'js>, e: Value<'js>) -> Result<()> {
         // Perform ! ReadableByteStreamControllerError(this, e).
-        self.readable_byte_stream_controller_error(e)
+        self.readable_byte_stream_controller_error(&ctx, e)
     }
 }
 
@@ -1111,6 +1308,11 @@ impl<'js> Trace<'js> for PullIntoDescriptor<'js> {
         self.buffer.trace(tracer);
         self.view_constructor.trace(tracer);
     }
+}
+
+enum PullIntoDescriptorRef<'js, 'a> {
+    Index(usize),
+    Owned(&'a PullIntoDescriptor<'js>),
 }
 
 #[derive(Trace)]
