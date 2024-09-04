@@ -1,6 +1,11 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function({
+  assert_throws_exactly,
+  test,
+}) {
+
 const error1 = new Error('error1');
 error1.name = 'error1';
 
@@ -15,3 +20,5 @@ test(() => {
   // So the queuingStrategy exception should be encountered first.
   assert_throws_exactly(error2, () => new ReadableStream(underlyingSource, queuingStrategy));
 }, 'underlyingSource argument should be converted after queuingStrategy argument');
+
+};

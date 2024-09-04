@@ -1,5 +1,5 @@
 'use strict';
-(function () {
+export default function ({step_timeout}) {
 
   class RandomPushSource {
     constructor(toPush) {
@@ -194,4 +194,4 @@
   self.sequentialReadableStream = sequentialReadableStream;
   self.transferArrayBufferView = transferArrayBufferView;
 
-}());
+};

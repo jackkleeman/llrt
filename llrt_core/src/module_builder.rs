@@ -14,6 +14,7 @@ use crate::modules::{
     path::PathModule,
     perf_hooks::PerfHooksModule,
     process::ProcessModule,
+    stream::StreamModule,
     timers::TimersModule,
     url::UrlModule,
     util::UtilModule,
@@ -88,6 +89,7 @@ impl Default for ModuleBuilder {
             .with_global(crate::modules::process::init)
             .with_global(crate::modules::navigator::init)
             .with_module(UrlModule)
+            .with_module(StreamModule)
             .with_global(crate::modules::http::init)
             .with_global(crate::modules::exceptions::init)
             .with_module(LlrtHexModule)

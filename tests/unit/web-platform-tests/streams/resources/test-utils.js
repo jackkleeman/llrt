@@ -1,4 +1,9 @@
 'use strict';
+export default function({
+  step_timeout,
+  assert_equals,
+  assert_array_equals,
+}) {
 
 self.delay = ms => new Promise(resolve => step_timeout(resolve, ms));
 
@@ -24,4 +29,6 @@ self.makePromiseAndResolveFunc = () => {
   let resolve;
   const promise = new Promise(r => { resolve = r; });
   return [promise, resolve];
+};
+
 };

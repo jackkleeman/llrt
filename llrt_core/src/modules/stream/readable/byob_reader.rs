@@ -1,12 +1,17 @@
 use llrt_utils::{bytes::ObjectBytes, object::ObjectExt};
 use rquickjs::{
-    class::Trace, methods, Class, Ctx, Error, Exception, FromJs, Function, Promise, Result, Value,
+    class::{OwnedBorrowMut, Trace},
+    methods,
+    prelude::This,
+    Class, Ctx, Error, Exception, FromJs, Function, Promise, Result, Value,
 };
 use std::collections::VecDeque;
 
 use super::{
+    byte_controller::ReadableStreamByteController, downgrade_owned_borrow_mut,
     promise_rejected_with, ReadableStream, ReadableStreamController, ReadableStreamGenericReader,
-    ReadableStreamReadResult, ReadableStreamState,
+    ReadableStreamReadResult, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
+    ReadableStreamState,
 };
 
 #[derive(Trace)]
@@ -37,10 +42,10 @@ impl<'js> ReadableStreamBYOBReader<'js> {
 
     fn set_up_readable_stream_byob_reader(
         ctx: Ctx<'js>,
-        stream: Class<'js, ReadableStream<'js>>,
-    ) -> Result<Class<'js, Self>> {
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+    ) -> Result<OwnedBorrowMut<'js, Self>> {
         // If ! IsReadableStreamLocked(stream) is true, throw a TypeError exception.
-        if stream.borrow().is_readable_stream_locked() {
+        if stream.is_readable_stream_locked() {
             return Err(Exception::throw_type(
                 &ctx,
                 "This stream has already been locked for exclusive reading by another reader",
@@ -48,7 +53,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         }
 
         // If stream.[[controller]] does not implement ReadableByteStreamController, throw a TypeError exception.
-        match stream.borrow().controller {
+        match stream.controller {
             Some(ReadableStreamController::ReadableStreamByteController(_)) => {},
             _ => {
                 return Err(Exception::throw_type(
@@ -59,17 +64,27 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         };
 
         // Perform ! ReadableStreamReaderGenericInitialize(reader, stream).
-        let generic =
-            ReadableStreamGenericReader::readable_stream_reader_generic_initialize(&ctx, stream)?;
+        let generic = ReadableStreamGenericReader::readable_stream_reader_generic_initialize(
+            &ctx,
+            downgrade_owned_borrow_mut(stream),
+        )?;
 
-        Class::instance(
+        let mut stream = OwnedBorrowMut::from_class(generic.stream.clone().unwrap());
+
+        let reader = Class::instance(
             ctx.clone(),
             Self {
                 generic,
                 // Set reader.[[readIntoRequests]] to a new empty list.
                 read_into_requests: VecDeque::new(),
             },
-        )
+        )?;
+
+        stream.reader = Some(ReadableStreamReader::ReadableStreamBYOBReader(
+            reader.clone(),
+        ));
+
+        Ok(OwnedBorrowMut::from_class(reader))
     }
 
     fn readable_stream_byob_reader_release(&mut self, ctx: &Ctx<'js>) -> Result<()> {
@@ -83,21 +98,21 @@ impl<'js> ReadableStreamBYOBReader<'js> {
     }
 
     fn readable_stream_byob_reader_read(
-        &mut self,
         ctx: &Ctx<'js>,
+        reader: OwnedBorrowMut<'js, Self>,
         view: ObjectBytes<'js>,
         min: usize,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
         // Let stream be reader.[[stream]].
         // Assert: stream is not undefined.
-        let stream = self
-            .generic
-            .stream
-            .clone()
-            .expect("ReadableStreamBYOBReaderRead called without stream");
-
-        let mut stream = stream.borrow_mut();
+        let mut stream = OwnedBorrowMut::from_class(
+            reader
+                .generic
+                .stream
+                .clone()
+                .expect("ReadableStreamBYOBReaderRead called without stream"),
+        );
 
         // Set stream.[[disturbed]] to true.
         stream.disturbed = true;
@@ -111,9 +126,12 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             // Otherwise, perform ! ReadableByteStreamControllerPullInto(stream.[[controller]], view, min, readIntoRequest).
             match &stream.controller {
                 Some(ReadableStreamController::ReadableStreamByteController(c)) => {
-                    c.borrow_mut().readable_byte_stream_controller_pull_into(
+                    let c = OwnedBorrowMut::from_class(c.clone());
+                    ReadableStreamByteController::readable_byte_stream_controller_pull_into(
                         ctx,
-                        c.clone(),
+                        c,
+                        stream,
+                        Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(reader)),
                         view,
                         min,
                         read_into_request,
@@ -132,14 +150,17 @@ impl<'js> ReadableStreamBYOBReader<'js> {
 #[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamBYOBReader<'js> {
     #[qjs(constructor)]
-    fn new(ctx: Ctx<'js>, stream: Class<'js, ReadableStream<'js>>) -> Result<Class<'js, Self>> {
+    pub fn new(
+        ctx: Ctx<'js>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+    ) -> Result<OwnedBorrowMut<'js, Self>> {
         // Perform ? SetUpReadableStreamBYOBReader(this, stream).
         Self::set_up_readable_stream_byob_reader(ctx, stream)
     }
 
     fn read(
-        &mut self,
         ctx: Ctx<'js>,
+        reader: This<OwnedBorrowMut<'js, Self>>,
         view: ObjectBytes<'js>,
         options: Option<ReadableStreamBYOBReaderReadOptions>,
     ) -> Result<Promise<'js>> {
@@ -204,7 +225,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         }
 
         // If this.[[stream]] is undefined, return a promise rejected with a TypeError exception.
-        if self.generic.stream.is_none() {
+        if reader.generic.stream.is_none() {
             let e: Value =
                 ctx.eval(r#"new TypeError("Cannot read a stream using a released reader")"#)?;
             return promise_rejected_with(&ctx, e);
@@ -245,7 +266,13 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         };
 
         // Perform ! ReadableStreamBYOBReaderRead(this, view, options["min"], readIntoRequest).
-        self.readable_stream_byob_reader_read(&ctx, view, options.min, read_into_request)?;
+        Self::readable_stream_byob_reader_read(
+            &ctx,
+            reader.0,
+            view,
+            options.min,
+            read_into_request,
+        )?;
 
         // Return promise.
         Ok(promise)

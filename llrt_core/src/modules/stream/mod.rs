@@ -1,13 +1,18 @@
-use readable::ReadableStream;
-use rquickjs::{Class, Error, FromJs, Result};
+use llrt_modules::ModuleInfo;
+use llrt_utils::module::export_default;
+use readable::{CountQueuingStrategy, ReadableStream};
+use rquickjs::{
+    module::{Declarations, Exports, ModuleDef},
+    Class, Ctx, Error, FromJs, Result,
+};
 use writeable::WriteableStream;
 
 mod readable;
 mod writeable;
 
 struct ReadableWritablePair<'js> {
-    readable: Class<'js, readable::ReadableStream<'js>>,
-    writeable: Class<'js, writeable::WriteableStream>,
+    readable: Class<'js, ReadableStream<'js>>,
+    writeable: Class<'js, WriteableStream>,
 }
 
 impl<'js> FromJs<'js> for ReadableWritablePair<'js> {
@@ -24,5 +29,37 @@ impl<'js> FromJs<'js> for ReadableWritablePair<'js> {
             readable,
             writeable,
         })
+    }
+}
+
+pub struct StreamModule;
+
+impl ModuleDef for StreamModule {
+    fn declare(declare: &Declarations) -> Result<()> {
+        declare.declare(stringify!(ReadableStream))?;
+        declare.declare(stringify!(CountQueuingStrategy))?;
+
+        declare.declare("default")?;
+        Ok(())
+    }
+
+    fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
+        export_default(ctx, exports, |default| {
+            Class::<ReadableStream>::define(default)?;
+            Class::<CountQueuingStrategy>::define(default)?;
+
+            Ok(())
+        })?;
+
+        Ok(())
+    }
+}
+
+impl From<StreamModule> for ModuleInfo<StreamModule> {
+    fn from(val: StreamModule) -> Self {
+        ModuleInfo {
+            name: "stream/web",
+            module: val,
+        }
     }
 }

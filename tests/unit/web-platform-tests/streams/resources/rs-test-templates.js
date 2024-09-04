@@ -1,5 +1,13 @@
 'use strict';
 
+export default function({
+  assert_equals,
+  assert_not_equals,
+  assert_array_equals,
+  assert_true,
+  promise_rejects_exactly,
+}) {
+
 // These tests can be run against any readable stream produced by the web platform that meets the given descriptions.
 // For readable stream tests, the factory should return the stream. For reader tests, the factory should return a
 // { stream, reader } object. (You can use this to vary the time at which you acquire a reader.)
@@ -717,5 +725,7 @@ self.templatedRSTeeCancel = (label, factory) => {
     ]);
 
   }, `${label}: erroring a teed stream should properly handle canceled branches`);
+
+};
 
 };

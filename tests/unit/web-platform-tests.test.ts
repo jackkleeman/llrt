@@ -2,6 +2,7 @@ import idlharness from "./web-platform-tests/resources/idlharness.js";
 import testharness from "./web-platform-tests/resources/testharness.js";
 import subsetTests from "./web-platform-tests/common/subset-tests.js";
 import encodings from "./web-platform-tests/encoding/resources/encodings.js";
+import { ReadableStream, CountQueuingStrategy } from "stream/web";
 
 const runTest = (test, done) => {
   //
@@ -30,6 +31,7 @@ const runTest = (test, done) => {
         json: () => Promise.resolve(data),
       });
     },
+    setTimeout: setTimeout,
     // Some tests require location to be defined
     location: {},
   };
@@ -45,7 +47,15 @@ const runTest = (test, done) => {
     debug: process.env.DEBUG !== undefined,
   });
 
+  const oldRs = globalThis.ReadableStream;
+  const oldCqs = globalThis.CountQueuingStrategy;
+  globalThis.ReadableStream = ReadableStream;
+  globalThis.CountQueuingStrategy = CountQueuingStrategy;
+
   context.add_completion_callback((tests, status, assertions) => {
+    globalThis.ReadableStream = oldRs;
+    globalThis.CountQueuingStrategy = oldCqs;
+
     // Check that tests were actually executed not including the optional step
     // that loads test data
     if (
@@ -382,6 +392,34 @@ describe("web-platform-tests", () => {
           .default,
         done
       );
+    });
+  });
+
+  describe("streams", () => {
+    describe("readable-streams", () => {
+      it("should pass bad-underlying-sources.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/bad-underlying-sources.any.js")
+            .default,
+          done
+        );
+      });
+
+      it("should pass cancel.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/cancel.any.js")
+            .default,
+          done
+        );
+      });
+
+      it("should pass constructor.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/constructor.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });
