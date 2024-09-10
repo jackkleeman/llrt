@@ -160,13 +160,13 @@ impl<'js> ReadableStreamDefaultController<'js> {
         let _ = upon_promise::<Value<'js>, _>(ctx.clone(), start_promise, {
             move |result| {
                 let mut controller = OwnedBorrowMut::from_class(controller_class);
+                let mut stream = OwnedBorrowMut::from_class(stream_class);
+                let mut reader = stream.reader_mut();
                 match result {
                     // Upon fulfillment of startPromise,
                     Ok(_) => {
                         // Set controller.[[started]] to true.
                         controller.started = true;
-                        let mut stream = OwnedBorrowMut::from_class(stream_class);
-                        let reader = stream.reader_mut();
                         // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
                         Self::readable_stream_default_controller_call_pull_if_needed(
                             ctx.clone(),
@@ -177,9 +177,13 @@ impl<'js> ReadableStreamDefaultController<'js> {
                     },
                     // Upon rejection of startPromise with reason r,
                     Err(r) => {
-                        let mut stream = OwnedBorrowMut::from_class(stream_class);
                         // Perform ! ReadableByteStreamControllerError(controller, r).
-                        controller.readable_stream_default_controller_error(&ctx, &mut stream, r)
+                        controller.readable_stream_default_controller_error(
+                            &ctx,
+                            &mut stream,
+                            reader.as_mut(),
+                            r,
+                        )
                     },
                 }
             }
@@ -230,6 +234,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
             move |result| {
                 let mut controller = OwnedBorrowMut::from_class(controller);
                 let mut stream = OwnedBorrowMut::from_class(stream);
+                let mut reader = reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
                 match result {
                     // Upon fulfillment of pullPromise,
                     Ok(_) => {
@@ -244,7 +249,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                                 ctx.clone(),
                                 controller,
                                 stream,
-                                reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r)),
+                                reader,
                             )?;
                         };
                         Ok(())
@@ -252,7 +257,12 @@ impl<'js> ReadableStreamDefaultController<'js> {
                     // Upon rejection of pullPromise with reason e,
                     Err(e) => {
                         // Perform ! ReadableStreamDefaultControllerError(controller, e).
-                        controller.readable_stream_default_controller_error(&ctx, &mut stream, e)
+                        controller.readable_stream_default_controller_error(
+                            &ctx,
+                            &mut stream,
+                            reader.as_mut(),
+                            e,
+                        )
                     },
                 }
             }
@@ -266,6 +276,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
         ctx: &Ctx<'js>,
         // Let stream be controller.[[stream]].
         stream: &mut ReadableStream<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         e: Value<'js>,
     ) -> Result<()> {
         // If stream.[[state]] is not "readable", return.
@@ -280,7 +291,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
         self.readable_stream_default_controller_clear_algorithms();
 
         // Perform ! ReadableStreamError(stream, e).
-        stream.readable_stream_error(ctx, e)?;
+        stream.readable_stream_error(ctx, reader, e)?;
 
         Ok(())
     }
@@ -405,26 +416,32 @@ impl<'js> ReadableStreamDefaultController<'js> {
             stream.readable_stream_fulfill_read_request(reader.as_mut(), chunk, false)?;
         } else {
             // Let result be the result of performing controller.[[strategySizeAlgorithm]], passing in chunk, and interpreting the result as a completion record.
-            let result = match controller.strategy_size_algorithm {
-                None => {
-                    panic!(
-                        "size algorithm used after ReadableStreamDefaultControllerClearAlgorithms"
-                    )
-                },
-                Some(SizeAlgorithm::AlwaysOne) => Ok(Value::new_number(ctx.clone(), 1.0)),
-                Some(SizeAlgorithm::SizeFunction(ref f)) => f.call((chunk.clone(),))?,
-            };
+            let (result, controller_class, stream_class, reader_class) =
+                Self::strategy_size_algorithm(
+                    ctx.clone(),
+                    controller,
+                    stream,
+                    reader,
+                    chunk.clone(),
+                );
+
+            controller = OwnedBorrowMut::from_class(controller_class);
+            stream = OwnedBorrowMut::from_class(stream_class);
+            reader = reader_class.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
 
             match result {
                 // If result is an abrupt completion,
-                Err(err @ Error::Exception) => {
+                Err(Error::Exception) => {
+                    let err = ctx.catch();
                     // Perform ! ReadableStreamDefaultControllerError(controller, result.[[Value]]).
                     controller.readable_stream_default_controller_error(
                         &ctx,
                         &mut stream,
-                        ctx.catch(),
+                        reader.as_mut(),
+                        err.clone(),
                     )?;
-                    return Err(err);
+
+                    return Err(ctx.throw(err));
                 },
                 // Let chunkSize be result.[[Value]].
                 Ok(chunk_size) => {
@@ -434,14 +451,16 @@ impl<'js> ReadableStreamDefaultController<'js> {
 
                     match enqueue_result {
                         // If enqueueResult is an abrupt completion,
-                        Err(err @ Error::Exception) => {
+                        Err(Error::Exception) => {
+                            let err = ctx.catch();
                             // Perform ! ReadableStreamDefaultControllerError(controller, enqueueResult.[[Value]]).
                             controller.readable_stream_default_controller_error(
                                 &ctx,
                                 &mut stream,
-                                ctx.catch(),
+                                reader.as_mut(),
+                                err.clone(),
                             )?;
-                            return Err(err);
+                            return Err(ctx.throw(err));
                         },
                         Err(err) => return Err(err),
                         Ok(()) => {},
@@ -592,6 +611,34 @@ impl<'js> ReadableStreamDefaultController<'js> {
             reader_class,
         ))
     }
+
+    fn strategy_size_algorithm(
+        ctx: Ctx<'js>,
+        controller: OwnedBorrowMut<'js, Self>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        chunk: Value<'js>,
+    ) -> (
+        Result<Value<'js>>,
+        Class<'js, Self>,
+        Class<'js, ReadableStream<'js>>,
+        Option<ReadableStreamReader<'js>>,
+    ) {
+        let strategy_size_algorithm = controller
+            .strategy_size_algorithm
+            .clone()
+            .expect("size algorithm used after ReadableStreamDefaultControllerClearAlgorithms");
+        let controller_class = controller.into_inner();
+        let stream_class = stream.into_inner();
+        let reader_class = reader.map(|r| r.into_inner());
+
+        (
+            strategy_size_algorithm.call(ctx, chunk),
+            controller_class,
+            stream_class,
+            reader_class,
+        )
+    }
 }
 
 #[methods]
@@ -670,10 +717,12 @@ impl<'js> ReadableStreamDefaultController<'js> {
                 .clone()
                 .expect("error() called on ReadableStreamDefaultController without stream"),
         );
+        let mut reader = stream.reader_mut();
         // Perform ! ReadableStreamDefaultControllerError(this, e).
         self.readable_stream_default_controller_error(
             &ctx,
             &mut stream,
+            reader.as_mut(),
             e.0.unwrap_or(Value::new_undefined(ctx.clone())),
         )
     }

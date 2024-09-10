@@ -171,26 +171,33 @@ impl<'js> ReadableStreamByteController<'js> {
 
         let _ = upon_promise::<Value<'js>, _>(ctx.clone(), start_promise, {
             let ctx = ctx.clone();
-            move |result| match result {
-                // Upon fulfillment of startPromise,
-                Ok(_) => {
-                    // Set controller.[[started]] to true.
-                    controller.started = true;
-                    let reader = stream.reader_mut();
-                    // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
-                    Self::readable_byte_stream_controller_call_pull_if_needed(
-                        ctx.clone(),
-                        controller,
-                        stream,
-                        reader,
-                    )?;
-                    Ok(())
-                },
-                // Upon rejection of startPromise with reason r,
-                Err(r) => {
-                    // Perform ! ReadableByteStreamControllerError(controller, r).
-                    controller.readable_byte_stream_controller_error(&ctx, &mut stream, r)
-                },
+            move |result| {
+                let mut reader = stream.reader_mut();
+                match result {
+                    // Upon fulfillment of startPromise,
+                    Ok(_) => {
+                        // Set controller.[[started]] to true.
+                        controller.started = true;
+                        // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
+                        Self::readable_byte_stream_controller_call_pull_if_needed(
+                            ctx.clone(),
+                            controller,
+                            stream,
+                            reader,
+                        )?;
+                        Ok(())
+                    },
+                    // Upon rejection of startPromise with reason r,
+                    Err(r) => {
+                        // Perform ! ReadableByteStreamControllerError(controller, r).
+                        controller.readable_byte_stream_controller_error(
+                            &ctx,
+                            &mut stream,
+                            reader.as_mut(),
+                            r,
+                        )
+                    },
+                }
             }
         })?;
 
@@ -239,6 +246,7 @@ impl<'js> ReadableStreamByteController<'js> {
             move |result| {
                 let mut controller = OwnedBorrowMut::from_class(controller);
                 let mut stream = OwnedBorrowMut::from_class(stream);
+                let mut reader = reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
                 match result {
                     Ok(_) => {
                         controller.pulling = false;
@@ -248,14 +256,17 @@ impl<'js> ReadableStreamByteController<'js> {
                                 ctx.clone(),
                                 controller,
                                 stream,
-                                reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r)),
+                                reader,
                             )?;
                         };
                         Ok(())
                     },
-                    Err(e) => {
-                        controller.readable_byte_stream_controller_error(&ctx, &mut stream, e)
-                    },
+                    Err(e) => controller.readable_byte_stream_controller_error(
+                        &ctx,
+                        &mut stream,
+                        reader.as_mut(),
+                        e,
+                    ),
                 }
             }
         })?;
@@ -321,6 +332,7 @@ impl<'js> ReadableStreamByteController<'js> {
         ctx: &Ctx<'js>,
         // Let stream be controller.[[stream]].
         stream: &mut ReadableStream<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         e: Value<'js>,
     ) -> Result<()> {
         // If stream.[[state]] is not "readable", return.
@@ -338,7 +350,7 @@ impl<'js> ReadableStreamByteController<'js> {
         self.readable_byte_stream_controller_clear_algorithms();
 
         // Perform ! ReadableStreamError(stream, e).
-        stream.readable_stream_error(ctx, e)?;
+        stream.readable_stream_error(ctx, reader, e)?;
 
         Ok(())
     }
@@ -395,6 +407,7 @@ impl<'js> ReadableStreamByteController<'js> {
         ctx: &Ctx<'js>,
         // Let stream be controller.[[stream]].
         stream: &mut ReadableStream<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
     ) -> Result<()> {
         // If controller.[[closeRequested]] is true or stream.[[state]] is not "readable", return.
         if self.close_requested || stream.state != ReadableStreamState::Readable {
@@ -418,7 +431,7 @@ impl<'js> ReadableStreamByteController<'js> {
                 let e: Value = ctx.eval(
                     r#"new TypeError("Insufficient bytes to fill elements in the given buffer")"#,
                 )?;
-                self.readable_byte_stream_controller_error(ctx, stream, e.clone())?;
+                self.readable_byte_stream_controller_error(ctx, stream, reader, e.clone())?;
                 return Err(ctx.throw(e));
             }
         }
@@ -480,6 +493,7 @@ impl<'js> ReadableStreamByteController<'js> {
                 controller.readable_byte_stream_enqueue_detached_pull_into_to_queue(
                     ctx.clone(),
                     &mut stream,
+                    reader.as_mut(),
                     0,
                 )?;
             }
@@ -559,6 +573,7 @@ impl<'js> ReadableStreamByteController<'js> {
         &mut self,
         ctx: Ctx<'js>,
         stream: &mut ReadableStream<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         pull_into_descriptor_index: usize,
     ) -> Result<()> {
         let pull_into_descriptor = &self.pending_pull_intos[pull_into_descriptor_index];
@@ -567,6 +582,7 @@ impl<'js> ReadableStreamByteController<'js> {
             self.readable_byte_stream_controller_enqueue_cloned_chunk_to_queue(
                 ctx,
                 stream,
+                reader,
                 pull_into_descriptor.buffer.clone(),
                 pull_into_descriptor.byte_offset,
                 pull_into_descriptor.bytes_filled,
@@ -697,6 +713,7 @@ impl<'js> ReadableStreamByteController<'js> {
         &mut self,
         ctx: Ctx<'js>,
         stream: &mut ReadableStream<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         buffer: ArrayBuffer<'js>,
         byte_offset: usize,
         byte_length: usize,
@@ -709,10 +726,12 @@ impl<'js> ReadableStreamByteController<'js> {
             ),
         ) {
             Ok(clone_result) => clone_result,
-            Err(err) => {
-                self.readable_byte_stream_controller_error(&ctx, stream, ctx.catch())?;
-                return Err(err);
+            Err(Error::Exception) => {
+                let err = ctx.catch();
+                self.readable_byte_stream_controller_error(&ctx, stream, reader, err.clone())?;
+                return Err(ctx.throw(err));
             },
+            Err(err) => return Err(err),
         };
 
         self.readable_byte_stream_controller_enqueue_chunk_to_queue(
@@ -872,7 +891,7 @@ impl<'js> ReadableStreamByteController<'js> {
         } else {
             // Otherwise,
             // Perform ! ReadableStreamFulfillReadIntoRequest(stream, filledView, done).
-            stream.readable_stream_fulfill_read_into_request(filled_view, done)
+            stream.readable_stream_fulfill_read_into_request(reader, filled_view, done)
         }
     }
 
@@ -1044,7 +1063,7 @@ impl<'js> ReadableStreamByteController<'js> {
         mut controller: OwnedBorrowMut<'js, Self>,
         // Let stream be controller.[[stream]].
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         view: ObjectBytes<'js>,
         min: usize,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
@@ -1168,7 +1187,12 @@ impl<'js> ReadableStreamByteController<'js> {
                 )?;
 
                 // Perform ! ReadableByteStreamControllerError(controller, e).
-                controller.readable_byte_stream_controller_error(ctx, &mut stream, e.clone())?;
+                controller.readable_byte_stream_controller_error(
+                    ctx,
+                    &mut stream,
+                    reader.as_mut(),
+                    e.clone(),
+                )?;
 
                 // Perform readIntoRequest’s error steps, given e.
                 read_into_request.error_steps.call((e,))?;
@@ -1281,9 +1305,10 @@ impl<'js> ReadableStreamByteController<'js> {
         }
 
         let mut stream = OwnedBorrowMut::from_class(self.stream.clone().unwrap());
+        let mut reader = stream.reader_mut();
 
         // Perform ? ReadableByteStreamControllerClose(this).
-        self.readable_byte_stream_controller_close(&ctx, &mut stream)
+        self.readable_byte_stream_controller_close(&ctx, &mut stream, reader.as_mut())
     }
 
     // undefined enqueue(ArrayBufferView chunk);
@@ -1347,8 +1372,10 @@ impl<'js> ReadableStreamByteController<'js> {
     // undefined error(optional any e);
     fn error(&mut self, ctx: Ctx<'js>, e: Value<'js>) -> Result<()> {
         let mut stream = OwnedBorrowMut::from_class(self.stream.clone().unwrap());
+        let mut reader = stream.reader_mut();
+
         // Perform ! ReadableByteStreamControllerError(this, e).
-        self.readable_byte_stream_controller_error(&ctx, &mut stream, e)
+        self.readable_byte_stream_controller_error(&ctx, &mut stream, reader.as_mut(), e)
     }
 }
 

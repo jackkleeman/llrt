@@ -215,20 +215,25 @@ impl<'js> ReadableStream<'js> {
 }
 
 impl<'js> ReadableStream<'js> {
-    fn readable_stream_error(&mut self, ctx: &Ctx<'js>, e: Value<'js>) -> Result<()> {
+    fn readable_stream_error(
+        &mut self,
+        ctx: &Ctx<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
+        e: Value<'js>,
+    ) -> Result<()> {
         // Set stream.[[state]] to "errored".
         self.state = ReadableStreamState::Errored;
         // Set stream.[[storedError]] to e.
         self.stored_error = Some(e.clone());
         // Let reader be stream.[[reader]].
-        let reader = match self.reader_mut() {
+        let reader = match reader {
             // If reader is undefined, return.
             None => return Ok(()),
             Some(reader) => reader,
         };
 
         match reader {
-            ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(mut r) => {
+            ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(ref mut r) => {
                 // Reject reader.[[closedPromise]] with e.
                 r.generic
                     .reject_closed_promise
@@ -243,7 +248,7 @@ impl<'js> ReadableStream<'js> {
                 // Perform ! ReadableStreamDefaultReaderErrorReadRequests(reader, e).
                 r.readable_stream_default_reader_error_read_requests(e)
             },
-            ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(mut r) => {
+            ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(ref mut r) => {
                 // Reject reader.[[closedPromise]] with e.
                 r.generic
                     .reject_closed_promise
@@ -332,13 +337,14 @@ impl<'js> ReadableStream<'js> {
 
     fn readable_stream_fulfill_read_into_request(
         &mut self,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         chunk: ObjectBytes<'js>,
         done: bool,
     ) -> Result<()> {
         // Assert: ! ReadableStreamHasBYOBReader(stream) is true.
         // Let reader be stream.[[reader]].
-        let read_into_requests = match self.reader {
-            Some(ReadableStreamReader::ReadableStreamBYOBReader(ref r)) => &mut r.borrow_mut().read_into_requests,
+        let read_into_requests = match reader {
+            Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(r)) => &mut r.read_into_requests,
             _ => panic!("ReadableStreamFulfillReadIntoRequest called on stream that doesn't satisfy ReadableStreamHasDefaultReader")
         };
 
@@ -559,7 +565,7 @@ impl<'js> FromJs<'js> for ReadableStreamType {
 
 struct QueuingStrategy<'js> {
     // unrestricted double highWaterMark;
-    high_water_mark: Option<f64>,
+    high_water_mark: Option<Value<'js>>,
     // callback QueuingStrategySize = unrestricted double (any chunk);
     size: Option<Function<'js>>,
 }
@@ -571,7 +577,7 @@ impl<'js> FromJs<'js> for QueuingStrategy<'js> {
             .as_object()
             .ok_or(Error::new_from_js(ty_name, "Object"))?;
 
-        let high_water_mark = obj.get_optional::<_, _>("highWaterMark")?;
+        let high_water_mark = obj.get_optional::<_, Value>("highWaterMark")?;
         let size = obj.get_optional::<_, _>("size")?;
 
         Ok(Self {
@@ -593,7 +599,8 @@ impl<'js> QueuingStrategy<'js> {
             None => Ok(default_hwm),
             Some(this) => {
                 // Let highWaterMark be strategy["highWaterMark"].
-                if let Some(high_water_mark) = this.high_water_mark {
+                if let Some(high_water_mark) = &this.high_water_mark {
+                    let high_water_mark = high_water_mark.as_number().unwrap_or(f64::NAN);
                     // If highWaterMark is NaN or highWaterMark < 0, throw a RangeError exception.
                     if high_water_mark.is_nan() || high_water_mark < 0.0 {
                         Err(Exception::throw_range(ctx, "Invalid highWaterMark"))
@@ -617,12 +624,6 @@ impl<'js> QueuingStrategy<'js> {
             Some(size) => SizeAlgorithm::SizeFunction(size.clone()),
         }
     }
-}
-
-#[derive(Trace)]
-enum SizeAlgorithm<'js> {
-    AlwaysOne,
-    SizeFunction(Function<'js>),
 }
 
 struct ReadableStreamGetReaderOptions {
@@ -1096,6 +1097,21 @@ fn set_promise_is_handled_to_true<'js>(ctx: Ctx<'js>, promise: &Promise<'js>) ->
     promise
         .then()?
         .call((This(promise.clone()), Undefined, Function::new(ctx, || {})))
+}
+
+#[derive(Trace, Clone)]
+enum SizeAlgorithm<'js> {
+    AlwaysOne,
+    SizeFunction(Function<'js>),
+}
+
+impl<'js> SizeAlgorithm<'js> {
+    fn call(&self, ctx: Ctx<'js>, chunk: Value<'js>) -> Result<Value<'js>> {
+        match self {
+            Self::AlwaysOne => Ok(Value::new_number(ctx, 1.0)),
+            Self::SizeFunction(ref f) => f.call((chunk.clone(),)),
+        }
+    }
 }
 
 enum StartAlgorithm<'js> {

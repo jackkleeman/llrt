@@ -397,6 +397,14 @@ describe("web-platform-tests", () => {
 
   describe("streams", () => {
     describe("readable-streams", () => {
+      it("should pass bad-strategies.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/bad-strategies.any.js")
+            .default,
+          done
+        );
+      });
+
       it("should pass bad-underlying-sources.any.js tests", (done) => {
         runTest(
           require("./web-platform-tests/streams/readable-streams/bad-underlying-sources.any.js")

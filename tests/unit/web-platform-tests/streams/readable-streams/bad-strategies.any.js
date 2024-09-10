@@ -1,6 +1,11 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function(
+  ctx
+) {
+const { promise_test, test, assert_equals, assert_throws_exactly, promise_rejects_exactly, assert_throws_js } = ctx;
+
 test(() => {
 
   const theError = new Error('a unique string');
@@ -196,3 +201,4 @@ promise_test(() => {
 
 }, 'Readable stream: invalid strategy.size return value when pulling');
 
+};
