@@ -54,14 +54,17 @@ const runTest = (test, done) => {
   const oldRs = globalThis.ReadableStream;
   const oldCqs = globalThis.CountQueuingStrategy;
   const oldRsdr = globalThis.ReadableStreamDefaultReader;
+  const oldGc = globalThis.gc;
   globalThis.ReadableStream = ReadableStream;
   globalThis.CountQueuingStrategy = CountQueuingStrategy;
   globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
+  globalThis.gc = globalThis.__gc;
 
   context.add_completion_callback((tests, status, assertions) => {
     globalThis.ReadableStream = oldRs;
     globalThis.CountQueuingStrategy = oldCqs;
     globalThis.ReadableStreamDefaultReader = oldRsdr;
+    globalThis.gc = oldGc;
 
     // Check that tests were actually executed not including the optional step
     // that loads test data
@@ -455,6 +458,22 @@ describe("web-platform-tests", () => {
       it("should pass floating-point-total-queue-size.any.js tests", (done) => {
         runTest(
           require("./web-platform-tests/streams/readable-streams/floating-point-total-queue-size.any.js")
+            .default,
+          done
+        );
+      });
+
+      // it("should pass from.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-streams/from.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      it("should pass garbage-collection.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/garbage-collection.any.js")
             .default,
           done
         );

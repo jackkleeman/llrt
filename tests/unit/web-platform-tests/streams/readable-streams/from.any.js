@@ -2,6 +2,9 @@
 // META: script=../resources/test-utils.js
 'use strict';
 
+export default function(ctx) {
+const { promise_test, assert_equals } = ctx;
+
 const iterableFactories = [
   ['an array of values', () => {
     return ['a', 'b'];
@@ -490,3 +493,5 @@ promise_test(async t => {
   await reader.closed;
 
 }, `ReadableStream.from(array), push() to array while reading`);
+
+};
