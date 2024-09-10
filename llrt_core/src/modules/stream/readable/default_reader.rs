@@ -16,7 +16,7 @@ use super::{
 
 #[derive(Trace)]
 #[rquickjs::class]
-pub(super) struct ReadableStreamDefaultReader<'js> {
+pub(crate) struct ReadableStreamDefaultReader<'js> {
     pub(super) generic: ReadableStreamGenericReader<'js>,
     pub(super) read_requests: VecDeque<ReadableStreamReadRequest<'js>>,
 }
@@ -113,9 +113,20 @@ impl<'js> ReadableStreamDefaultReader<'js> {
 
         Ok(reader)
     }
+
+    fn readable_stream_default_reader_release(&mut self, ctx: &Ctx<'js>) -> Result<()> {
+        // Perform ! ReadableStreamReaderGenericRelease(reader).
+        self.generic.readable_stream_reader_generic_release(ctx)?;
+
+        // Let e be a new TypeError exception.
+        let e: Value = ctx.eval(r#"new TypeError("Reader was released")"#)?;
+
+        // Perform ! ReadableStreamDefaultReaderErrorReadRequests(reader, e).
+        self.readable_stream_default_reader_error_read_requests(e)
+    }
 }
 
-#[methods]
+#[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamDefaultReader<'js> {
     #[qjs(constructor)]
     pub fn new(
@@ -177,6 +188,16 @@ impl<'js> ReadableStreamDefaultReader<'js> {
 
         // Return promise.
         Ok(promise)
+    }
+
+    fn release_lock(&mut self, ctx: Ctx<'js>) -> Result<()> {
+        // If this.[[stream]] is undefined, return.
+        if self.generic.stream.is_none() {
+            return Ok(());
+        }
+
+        // Perform ! ReadableStreamDefaultReaderRelease(this).
+        self.readable_stream_default_reader_release(&ctx)
     }
 
     #[qjs(get)]

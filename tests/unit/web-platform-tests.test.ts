@@ -2,7 +2,11 @@ import idlharness from "./web-platform-tests/resources/idlharness.js";
 import testharness from "./web-platform-tests/resources/testharness.js";
 import subsetTests from "./web-platform-tests/common/subset-tests.js";
 import encodings from "./web-platform-tests/encoding/resources/encodings.js";
-import { ReadableStream, CountQueuingStrategy } from "stream/web";
+import {
+  ReadableStream,
+  CountQueuingStrategy,
+  ReadableStreamDefaultReader,
+} from "stream/web";
 
 const runTest = (test, done) => {
   //
@@ -49,12 +53,15 @@ const runTest = (test, done) => {
 
   const oldRs = globalThis.ReadableStream;
   const oldCqs = globalThis.CountQueuingStrategy;
+  const oldRsdr = globalThis.ReadableStreamDefaultReader;
   globalThis.ReadableStream = ReadableStream;
   globalThis.CountQueuingStrategy = CountQueuingStrategy;
+  globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
 
   context.add_completion_callback((tests, status, assertions) => {
     globalThis.ReadableStream = oldRs;
     globalThis.CountQueuingStrategy = oldCqs;
+    globalThis.ReadableStreamDefaultReader = oldRsdr;
 
     // Check that tests were actually executed not including the optional step
     // that loads test data
@@ -432,6 +439,14 @@ describe("web-platform-tests", () => {
       it("should pass count-queueing-strategy-integration.any.js tests", (done) => {
         runTest(
           require("./web-platform-tests/streams/readable-streams/count-queuing-strategy-integration.any.js")
+            .default,
+          done
+        );
+      });
+
+      it("should pass default-reader.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/default-reader.any.js")
             .default,
           done
         );

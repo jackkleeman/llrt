@@ -16,7 +16,7 @@ use super::{
 
 #[derive(Trace)]
 #[rquickjs::class]
-pub(super) struct ReadableStreamBYOBReader<'js> {
+pub(crate) struct ReadableStreamBYOBReader<'js> {
     pub(super) generic: ReadableStreamGenericReader<'js>,
     pub(super) read_into_requests: VecDeque<ReadableStreamReadIntoRequest<'js>>,
 }

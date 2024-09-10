@@ -2,6 +2,9 @@
 // META: script=../resources/rs-utils.js
 'use strict';
 
+export default function(ctx) {
+const { promise_test, test, assert_equals, assert_object_equals, assert_throws_js, assert_true, promise_rejects_js, assert_not_equals, promise_rejects_exactly } = ctx;
+
 test(() => {
 
   assert_throws_js(TypeError, () => new ReadableStreamDefaultReader('potato'));
@@ -537,3 +540,5 @@ promise_test(t => {
   return Promise.all([promise1, promise2]);
 
 }, 'Second reader can read chunks after first reader was released with pending read requests');
+
+};

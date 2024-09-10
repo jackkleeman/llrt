@@ -1,6 +1,6 @@
 use llrt_modules::ModuleInfo;
 use llrt_utils::module::export_default;
-use readable::{CountQueuingStrategy, ReadableStream};
+use readable::{CountQueuingStrategy, ReadableStream, ReadableStreamDefaultReader};
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
     Class, Ctx, Error, FromJs, Result,
@@ -38,6 +38,7 @@ impl ModuleDef for StreamModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare(stringify!(ReadableStream))?;
         declare.declare(stringify!(CountQueuingStrategy))?;
+        declare.declare(stringify!(ReadableStreamDefaultReader))?;
 
         declare.declare("default")?;
         Ok(())
@@ -47,6 +48,7 @@ impl ModuleDef for StreamModule {
         export_default(ctx, exports, |default| {
             Class::<ReadableStream>::define(default)?;
             Class::<CountQueuingStrategy>::define(default)?;
+            Class::<ReadableStreamDefaultReader>::define(default)?;
 
             Ok(())
         })?;

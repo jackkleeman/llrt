@@ -1020,25 +1020,26 @@ impl<'js> ReadableStreamByteController<'js> {
     }
 
     pub(super) fn cancel_steps(
-        &mut self,
         ctx: &Ctx<'js>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         reason: Value<'js>,
     ) -> Result<Promise<'js>> {
         // Perform ! ReadableByteStreamControllerClearPendingPullIntos(this).
-        self.readable_byte_stream_controller_clear_pending_pull_intos();
+        controller.readable_byte_stream_controller_clear_pending_pull_intos();
 
         // Perform ! ResetQueue(this).
-        self.reset_queue();
+        controller.reset_queue();
 
         // Let result be the result of performing this.[[cancelAlgorithm]], passing in reason.
-        let result = self
-            .cancel_algorithm
-            .as_ref()
-            .expect("ReadableStreamByteControllerClearAlgorithms")
-            .call(ctx.clone(), reason)?;
+        let (result, controller, _, _) =
+            Self::cancel_algorithm(ctx.clone(), controller, stream, reader, reason)?;
+
+        let mut controller = OwnedBorrowMut::from_class(controller);
 
         // Perform ! ReadableByteStreamControllerClearAlgorithms(this).
-        self.readable_byte_stream_controller_clear_algorithms();
+        controller.readable_byte_stream_controller_clear_algorithms();
 
         // Return result.
         Ok(result)
@@ -1267,6 +1268,34 @@ impl<'js> ReadableStreamByteController<'js> {
                 ctx,
                 ReadableStreamController::ReadableStreamByteController(controller_class.clone()),
             )?,
+            controller_class,
+            stream_class,
+            reader_class,
+        ))
+    }
+
+    fn cancel_algorithm(
+        ctx: Ctx<'js>,
+        controller: OwnedBorrowMut<'js, Self>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        reason: Value<'js>,
+    ) -> Result<(
+        Promise<'js>,
+        Class<'js, Self>,
+        Class<'js, ReadableStream<'js>>,
+        Option<ReadableStreamReader<'js>>,
+    )> {
+        let cancel_algorithm = controller
+            .cancel_algorithm
+            .clone()
+            .expect("cancel algorithm used after ReadableStreamDefaultControllerClearAlgorithms");
+        let controller_class = controller.into_inner();
+        let stream_class = stream.into_inner();
+        let reader_class = reader.map(|r| r.into_inner());
+
+        Ok((
+            cancel_algorithm.call(ctx, reason)?,
             controller_class,
             stream_class,
             reader_class,
