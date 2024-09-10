@@ -1,6 +1,9 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function(ctx) {
+const { promise_test, test, assert_equals, assert_object_equals } = ctx;
+
 test(() => {
 
   new ReadableStream({}, new CountQueuingStrategy({ highWaterMark: 4 }));
@@ -206,3 +209,5 @@ promise_test(() => {
     });
 
 }, 'Correctly governs a ReadableStreamController\'s desiredSize property (HWM = 4)');
+
+};

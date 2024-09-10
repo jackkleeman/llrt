@@ -428,6 +428,14 @@ describe("web-platform-tests", () => {
           done
         );
       });
+      
+      it("should pass count-queueing-strategy-integration.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/count-queuing-strategy-integration.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });

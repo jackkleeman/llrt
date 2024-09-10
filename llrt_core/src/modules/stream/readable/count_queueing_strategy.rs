@@ -8,7 +8,7 @@ pub(crate) struct CountQueuingStrategy<'js> {
     size: Function<'js>,
 }
 
-#[methods]
+#[methods(rename_all = "camelCase")]
 impl<'js> CountQueuingStrategy<'js> {
     #[qjs(constructor)]
     fn new(ctx: Ctx<'js>, init: QueueingStrategyInit) -> Result<Self> {
@@ -21,7 +21,12 @@ impl<'js> CountQueuingStrategy<'js> {
 
     #[qjs(get)]
     fn size(&self) -> Function<'js> {
-        return self.size.clone();
+        self.size.clone()
+    }
+
+    #[qjs(get)]
+    fn high_water_mark(&self) -> f64 {
+        self.high_water_mark
     }
 }
 

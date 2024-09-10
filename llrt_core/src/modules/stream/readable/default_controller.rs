@@ -641,7 +641,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
     }
 }
 
-#[methods]
+#[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamDefaultController<'js> {
     // readonly attribute unrestricted double? desiredSize;
     #[qjs(get)]
