@@ -451,6 +451,14 @@ describe("web-platform-tests", () => {
           done
         );
       });
+
+      it("should pass floating-point-total-queue-size.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/floating-point-total-queue-size.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });
