@@ -15,9 +15,10 @@ use rquickjs::{
 
 use super::{
     byob_reader::ReadableStreamReadIntoRequest, class_from_owned_borrow_mut, copy_data_block_bytes,
-    promise_resolved_with, transfer_array_buffer, upon_promise, CancelAlgorithm, PullAlgorithm,
-    ReadableStream, ReadableStreamController, ReadableStreamReadRequest, ReadableStreamReader,
-    ReadableStreamReaderOwnedBorrowMut, ReadableStreamState, StartAlgorithm, UnderlyingSource,
+    promise_resolved_with, transfer_array_buffer, upon_promise, CancelAlgorithm, Null,
+    PullAlgorithm, ReadableStream, ReadableStreamController, ReadableStreamReadRequest,
+    ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, ReadableStreamState, StartAlgorithm,
+    Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]
@@ -44,53 +45,43 @@ impl<'js> ReadableStreamByteController<'js> {
     pub(super) fn set_up_readable_byte_stream_controller_from_underlying_source(
         ctx: &Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-        underlying_source: Value<'js>,
-        underlying_source_dict: Option<UnderlyingSource<'js>>,
+        underlying_source: Null<Undefined<Object<'js>>>,
+        underlying_source_dict: UnderlyingSource<'js>,
         high_water_mark: usize,
     ) -> Result<()> {
         let controller = Self::default();
 
-        let (start_algorithm, pull_algorithm, cancel_algorithm, auto_allocate_chunk_size) =
-            if let Some(underlying_source_dict) = underlying_source_dict {
-                (
-                    // If underlyingSourceDict["start"] exists, then set startAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["start"] with argument list
-                    // « controller » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .start
-                        .map(|f| StartAlgorithm::Function {
-                            f,
-                            underlying_source: underlying_source.clone(),
-                        })
-                        .unwrap_or(StartAlgorithm::ReturnUndefined),
-                    // If underlyingSourceDict["pull"] exists, then set pullAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["pull"] with argument list
-                    // « controller » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .pull
-                        .map(|f| PullAlgorithm::Function {
-                            f,
-                            underlying_source: underlying_source.clone(),
-                        })
-                        .unwrap_or(PullAlgorithm::ReturnPromiseUndefined),
-                    // If underlyingSourceDict["cancel"] exists, then set cancelAlgorithm to an algorithm which takes an argument reason and returns the result of invoking underlyingSourceDict["cancel"] with argument list
-                    // « reason » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .cancel
-                        .map(|f| CancelAlgorithm::Function {
-                            f,
-                            underlying_source,
-                        })
-                        .unwrap_or(CancelAlgorithm::ReturnPromiseUndefined),
-                    // Let autoAllocateChunkSize be underlyingSourceDict["autoAllocateChunkSize"], if it exists, or undefined otherwise.
-                    underlying_source_dict.auto_allocate_chunk_size,
-                )
-            } else {
-                (
-                    StartAlgorithm::ReturnUndefined,
-                    PullAlgorithm::ReturnPromiseUndefined,
-                    CancelAlgorithm::ReturnPromiseUndefined,
-                    None,
-                )
-            };
+        let (start_algorithm, pull_algorithm, cancel_algorithm, auto_allocate_chunk_size) = (
+            // If underlyingSourceDict["start"] exists, then set startAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["start"] with argument list
+            // « controller » and callback this value underlyingSource.
+            underlying_source_dict
+                .start
+                .map(|f| StartAlgorithm::Function {
+                    f,
+                    underlying_source: underlying_source.clone(),
+                })
+                .unwrap_or(StartAlgorithm::ReturnUndefined),
+            // If underlyingSourceDict["pull"] exists, then set pullAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["pull"] with argument list
+            // « controller » and callback this value underlyingSource.
+            underlying_source_dict
+                .pull
+                .map(|f| PullAlgorithm::Function {
+                    f,
+                    underlying_source: underlying_source.clone(),
+                })
+                .unwrap_or(PullAlgorithm::ReturnPromiseUndefined),
+            // If underlyingSourceDict["cancel"] exists, then set cancelAlgorithm to an algorithm which takes an argument reason and returns the result of invoking underlyingSourceDict["cancel"] with argument list
+            // « reason » and callback this value underlyingSource.
+            underlying_source_dict
+                .cancel
+                .map(|f| CancelAlgorithm::Function {
+                    f,
+                    underlying_source,
+                })
+                .unwrap_or(CancelAlgorithm::ReturnPromiseUndefined),
+            // Let autoAllocateChunkSize be underlyingSourceDict["autoAllocateChunkSize"], if it exists, or undefined otherwise.
+            underlying_source_dict.auto_allocate_chunk_size,
+        );
 
         // If autoAllocateChunkSize is 0, then throw a TypeError exception.
         if auto_allocate_chunk_size == Some(0) {
@@ -318,7 +309,7 @@ impl<'js> ReadableStreamByteController<'js> {
         let desired_size = self.readable_byte_stream_controller_get_desired_size(stream);
 
         // Assert: desiredSize is not null.
-        if desired_size.expect("desired_size must not be null") > 0 {
+        if desired_size.0.expect("desired_size must not be null") > 0 {
             // If desiredSize > 0, return true.
             return true;
         }
@@ -383,15 +374,15 @@ impl<'js> ReadableStreamByteController<'js> {
     fn readable_byte_stream_controller_get_desired_size(
         &self,
         stream: &ReadableStream<'js>,
-    ) -> Option<usize> {
+    ) -> Null<usize> {
         // Let state be controller.[[stream]].[[state]].
         match stream.state {
             // If state is "errored", return null.
-            ReadableStreamState::Errored => None,
+            ReadableStreamState::Errored => Null(None),
             // If state is "closed", return 0.
-            ReadableStreamState::Closed => Some(0),
+            ReadableStreamState::Closed => Null(Some(0)),
             // Return controller.[[strategyHWM]] − controller.[[queueTotalSize]].
-            _ => Some(self.strategy_hwm - self.queue_total_size),
+            _ => Null(Some(self.strategy_hwm - self.queue_total_size)),
         }
     }
 
@@ -770,7 +761,10 @@ impl<'js> ReadableStreamByteController<'js> {
 
         // Perform ! ReadableByteStreamControllerHandleQueueDrain(controller).
         (controller, stream, reader) = Self::readable_byte_stream_controller_handle_queue_drain(
-            ctx, controller, stream, reader,
+            ctx.clone(),
+            controller,
+            stream,
+            reader,
         )?;
 
         // Let view be ! Construct(%Uint8Array%, « entry’s buffer, entry’s byte offset, entry’s byte length »).
@@ -896,7 +890,7 @@ impl<'js> ReadableStreamByteController<'js> {
     }
 
     fn readable_byte_stream_controller_handle_queue_drain(
-        ctx: &Ctx<'js>,
+        ctx: Ctx<'js>,
         mut controller: OwnedBorrowMut<'js, Self>,
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
@@ -911,7 +905,7 @@ impl<'js> ReadableStreamByteController<'js> {
             controller.readable_byte_stream_controller_clear_algorithms();
             let reader = stream.reader_mut();
             // Perform ! ReadableStreamClose(controller.[[stream]]).
-            stream.readable_stream_close(reader.as_ref())?;
+            stream.readable_stream_close(ctx, reader.as_ref())?;
             Ok((controller, stream, reader))
         } else {
             // Otherwise,
@@ -1170,7 +1164,10 @@ impl<'js> ReadableStreamByteController<'js> {
 
                 // Perform ! ReadableByteStreamControllerHandleQueueDrain(controller).
                 Self::readable_byte_stream_controller_handle_queue_drain(
-                    ctx, controller, stream, reader,
+                    ctx.clone(),
+                    controller,
+                    stream,
+                    reader,
                 )?;
 
                 // Perform readIntoRequest’s chunk steps, given filledView.
@@ -1307,7 +1304,7 @@ impl<'js> ReadableStreamByteController<'js> {
 impl<'js> ReadableStreamByteController<'js> {
     // readonly attribute unrestricted double? desiredSize;
     #[qjs(get)]
-    fn desired_size(&self) -> Option<usize> {
+    fn desired_size(&self) -> Null<usize> {
         let stream = OwnedBorrow::from_class(
             self.stream
                 .clone()

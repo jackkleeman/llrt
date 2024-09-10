@@ -4,7 +4,7 @@ use rquickjs::{
     class::{OwnedBorrow, OwnedBorrowMut, Trace},
     methods,
     prelude::{Opt, This},
-    Class, Ctx, Error, Exception, Promise, Result, Value,
+    Class, Ctx, Error, Exception, Object, Promise, Result, Value,
 };
 
 use crate::modules::stream::readable::{
@@ -13,9 +13,9 @@ use crate::modules::stream::readable::{
 };
 
 use super::{
-    class_from_owned_borrow_mut, promise_resolved_with, upon_promise, ReadableStream,
+    class_from_owned_borrow_mut, promise_resolved_with, upon_promise, Null, ReadableStream,
     ReadableStreamController, ReadableStreamReadRequest, ReadableStreamState, SizeAlgorithm,
-    UnderlyingSource,
+    Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]
@@ -44,52 +44,43 @@ impl<'js> ReadableStreamDefaultController<'js> {
     pub(super) fn set_up_readable_stream_default_controller_from_underlying_source(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-        underlying_source: Value<'js>,
-        underlying_source_dict: Option<UnderlyingSource<'js>>,
+        underlying_source: Null<Undefined<Object<'js>>>,
+        underlying_source_dict: UnderlyingSource<'js>,
         high_water_mark: f64,
         size_algorithm: SizeAlgorithm<'js>,
     ) -> Result<()> {
         // Let controller be a new ReadableStreamDefaultController.
         let controller = Self::default();
 
-        let (start_algorithm, pull_algorithm, cancel_algorithm) =
-            if let Some(underlying_source_dict) = underlying_source_dict {
-                (
-                    // If underlyingSourceDict["start"] exists, then set startAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["start"] with argument list
-                    // « controller » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .start
-                        .map(|f| StartAlgorithm::Function {
-                            f,
-                            underlying_source: underlying_source.clone(),
-                        })
-                        .unwrap_or(StartAlgorithm::ReturnUndefined),
-                    // If underlyingSourceDict["pull"] exists, then set pullAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["pull"] with argument list
-                    // « controller » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .pull
-                        .map(|f| PullAlgorithm::Function {
-                            f,
-                            underlying_source: underlying_source.clone(),
-                        })
-                        .unwrap_or(PullAlgorithm::ReturnPromiseUndefined),
-                    // If underlyingSourceDict["cancel"] exists, then set cancelAlgorithm to an algorithm which takes an argument reason and returns the result of invoking underlyingSourceDict["cancel"] with argument list
-                    // « reason » and callback this value underlyingSource.
-                    underlying_source_dict
-                        .cancel
-                        .map(|f| CancelAlgorithm::Function {
-                            f,
-                            underlying_source,
-                        })
-                        .unwrap_or(CancelAlgorithm::ReturnPromiseUndefined),
-                )
-            } else {
-                (
-                    StartAlgorithm::ReturnUndefined,
-                    PullAlgorithm::ReturnPromiseUndefined,
-                    CancelAlgorithm::ReturnPromiseUndefined,
-                )
-            };
+        let (start_algorithm, pull_algorithm, cancel_algorithm) = (
+            // If underlyingSourceDict["start"] exists, then set startAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["start"] with argument list
+            // « controller » and callback this value underlyingSource.
+            underlying_source_dict
+                .start
+                .map(|f| StartAlgorithm::Function {
+                    f,
+                    underlying_source: underlying_source.clone(),
+                })
+                .unwrap_or(StartAlgorithm::ReturnUndefined),
+            // If underlyingSourceDict["pull"] exists, then set pullAlgorithm to an algorithm which returns the result of invoking underlyingSourceDict["pull"] with argument list
+            // « controller » and callback this value underlyingSource.
+            underlying_source_dict
+                .pull
+                .map(|f| PullAlgorithm::Function {
+                    f,
+                    underlying_source: underlying_source.clone(),
+                })
+                .unwrap_or(PullAlgorithm::ReturnPromiseUndefined),
+            // If underlyingSourceDict["cancel"] exists, then set cancelAlgorithm to an algorithm which takes an argument reason and returns the result of invoking underlyingSourceDict["cancel"] with argument list
+            // « reason » and callback this value underlyingSource.
+            underlying_source_dict
+                .cancel
+                .map(|f| CancelAlgorithm::Function {
+                    f,
+                    underlying_source,
+                })
+                .unwrap_or(CancelAlgorithm::ReturnPromiseUndefined),
+        );
 
         let controller = OwnedBorrowMut::from_class(Class::instance(ctx.clone(), controller)?);
 
@@ -324,6 +315,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
         // Let desiredSize be ! ReadableStreamDefaultControllerGetDesiredSize(controller).
         let desired_size = self
             .readable_stream_default_controller_get_desired_size(stream)
+            .0
             .expect(
             "desiredSize should not be null during ReadableStreamDefaultControllerShouldCallPull",
         );
@@ -359,20 +351,21 @@ impl<'js> ReadableStreamDefaultController<'js> {
     fn readable_stream_default_controller_get_desired_size(
         &self,
         stream: &ReadableStream<'js>,
-    ) -> Option<f64> {
+    ) -> Null<f64> {
         // Let state be controller.[[stream]].[[state]].
         match stream.state {
             // If state is "errored", return null.
-            ReadableStreamState::Errored => None,
+            ReadableStreamState::Errored => Null(None),
             // If state is "closed", return 0.
-            ReadableStreamState::Closed => Some(0.0),
+            ReadableStreamState::Closed => Null(Some(0.0)),
             // Return controller.[[strategyHWM]] − controller.[[queueTotalSize]].
-            ReadableStreamState::Readable => Some(self.strategy_hwm - self.queue_total_size),
+            ReadableStreamState::Readable => Null(Some(self.strategy_hwm - self.queue_total_size)),
         }
     }
 
     fn readable_stream_default_controller_close(
         &mut self,
+        ctx: Ctx<'js>,
         // Let stream be controller.[[stream]].
         stream: &mut ReadableStream<'js>,
     ) -> Result<()> {
@@ -390,7 +383,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
             self.readable_stream_default_controller_clear_algorithms();
             let reader = stream.reader_mut();
             // Perform ! ReadableStreamClose(stream).
-            stream.readable_stream_close(reader.as_ref())?;
+            stream.readable_stream_close(ctx, reader.as_ref())?;
         }
 
         Ok(())
@@ -529,7 +522,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
                 // Perform ! ReadableStreamDefaultControllerClearAlgorithms(this).
                 controller.readable_stream_default_controller_clear_algorithms();
                 // Perform ! ReadableStreamClose(stream).
-                stream.readable_stream_close(Some(&reader))?;
+                stream.readable_stream_close(ctx.clone(), Some(&reader))?;
             } else {
                 // Otherwise, perform ! ReadableStreamDefaultControllerCallPullIfNeeded(this).
                 Self::readable_stream_default_controller_call_pull_if_needed(
@@ -671,9 +664,14 @@ impl<'js> ReadableStreamDefaultController<'js> {
 
 #[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamDefaultController<'js> {
+    // this is required by web platform tests for unclear reasons
+    fn constructor() -> Self {
+        unimplemented!()
+    }
+
     // readonly attribute unrestricted double? desiredSize;
     #[qjs(get)]
-    fn desired_size(&self) -> Option<f64> {
+    fn desired_size(&self) -> Null<f64> {
         let stream = OwnedBorrow::from_class(
             self.stream
                 .clone()
@@ -699,7 +697,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
         }
 
         // Perform ! ReadableStreamDefaultControllerClose(this).
-        self.readable_stream_default_controller_close(&mut stream)
+        self.readable_stream_default_controller_close(ctx, &mut stream)
     }
 
     // undefined enqueue(optional any chunk);

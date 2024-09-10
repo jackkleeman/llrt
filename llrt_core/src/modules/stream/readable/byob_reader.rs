@@ -1,4 +1,4 @@
-use llrt_utils::{bytes::ObjectBytes, object::ObjectExt};
+use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
     class::{OwnedBorrowMut, Trace},
     methods,
@@ -9,9 +9,9 @@ use std::collections::VecDeque;
 
 use super::{
     byte_controller::ReadableStreamByteController, downgrade_owned_borrow_mut,
-    promise_rejected_with, ReadableStream, ReadableStreamController, ReadableStreamGenericReader,
-    ReadableStreamReadResult, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
-    ReadableStreamState,
+    promise_rejected_with, ObjectExt, ReadableStream, ReadableStreamController,
+    ReadableStreamGenericReader, ReadableStreamReadResult, ReadableStreamReader,
+    ReadableStreamReaderOwnedBorrowMut, ReadableStreamState,
 };
 
 #[derive(Trace)]

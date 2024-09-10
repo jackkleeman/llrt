@@ -5,14 +5,13 @@ use byob_reader::ReadableStreamReadIntoRequest;
 use byte_controller::ReadableStreamByteController;
 use default_controller::ReadableStreamDefaultController;
 use llrt_utils::{
-    bytes::ObjectBytes, error_messages::ERROR_MSG_ARRAY_BUFFER_DETACHED, object::ObjectExt,
-    result::ResultExt,
+    bytes::ObjectBytes, error_messages::ERROR_MSG_ARRAY_BUFFER_DETACHED, result::ResultExt,
 };
 use rquickjs::{
     class::{JsClass, OwnedBorrow, OwnedBorrowMut, Trace, Tracer},
     prelude::{List, OnceFn, Opt, This},
-    ArrayBuffer, Class, Ctx, Error, Exception, FromJs, Function, IntoJs, Object, Promise, Result,
-    Type, Undefined, Value,
+    ArrayBuffer, Class, Ctx, Error, Exception, FromJs, Function, IntoAtom, IntoJs, Object, Promise,
+    Result, Type, Value,
 };
 
 use super::{writeable::WriteableStream, ReadableWritablePair};
@@ -51,18 +50,17 @@ impl<'js> ReadableStream<'js> {
     #[qjs(constructor)]
     fn new(
         ctx: Ctx<'js>,
-        underlying_source: Opt<Value<'js>>,
+        underlying_source: Opt<Undefined<Object<'js>>>,
         queuing_strategy: Opt<QueuingStrategy<'js>>,
     ) -> Result<Class<'js, Self>> {
         // If underlyingSource is missing, set it to null.
-        let underlying_source = match underlying_source.0 {
-            None => Value::new_null(ctx.clone()),
-            Some(underlying_source) => underlying_source,
-        };
+        let underlying_source = Null(underlying_source.0);
 
         // Let underlyingSourceDict be underlyingSource, converted to an IDL value of type UnderlyingSource.
-        let underlying_source_dict: Option<UnderlyingSource<'js>> =
-            FromJs::from_js(&ctx, underlying_source.clone())?;
+        let underlying_source_dict = match underlying_source {
+            Null(None) | Null(Some(Undefined(None))) => UnderlyingSource::default(),
+            Null(Some(Undefined(Some(ref obj)))) => UnderlyingSource::from_object(obj.clone())?,
+        };
 
         let stream_class = Class::instance(
             ctx.clone(),
@@ -79,10 +77,7 @@ impl<'js> ReadableStream<'js> {
         )?;
         let stream = OwnedBorrowMut::from_class(stream_class.clone());
 
-        match underlying_source_dict
-            .as_ref()
-            .and_then(|s| s.r#type.as_ref())
-        {
+        match underlying_source_dict.r#type {
             // If underlyingSourceDict["type"] is "bytes":
             Some(ReadableStreamType::Bytes) => {
                 // If strategy["size"] exists, throw a RangeError exception.
@@ -162,10 +157,10 @@ impl<'js> ReadableStream<'js> {
         }
         let reader = stream.reader_mut();
         Self::readable_stream_cancel(
-            &ctx,
+            ctx.clone(),
             stream.0,
             reader,
-            reason.0.unwrap_or(Value::new_undefined(ctx.clone())),
+            reason.0.unwrap_or(Value::new_undefined(ctx)),
         )
     }
 
@@ -173,18 +168,18 @@ impl<'js> ReadableStream<'js> {
     fn get_reader(
         ctx: Ctx<'js>,
         stream: This<OwnedBorrowMut<'js, Self>>,
-        options: Opt<ReadableStreamGetReaderOptions>,
+        options: Opt<Undefined<ReadableStreamGetReaderOptions>>,
     ) -> Result<Value<'js>> {
         let (stream_class, stream) = class_from_owned_borrow_mut(stream.0);
         // If options["mode"] does not exist, return ? AcquireReadableStreamDefaultReader(this).
         match options.0 {
-            None | Some(ReadableStreamGetReaderOptions { mode: None }) => {
+            None | Some(Undefined(None | Some(ReadableStreamGetReaderOptions { mode: None }))) => {
                 ReadableStreamReader::acquire_readable_stream_default_reader(ctx.clone(), stream)?
             },
             // Return ? AcquireReadableStreamBYOBReader(this).
-            Some(ReadableStreamGetReaderOptions {
+            Some(Undefined(Some(ReadableStreamGetReaderOptions {
                 mode: Some(ReadableStreamReaderMode::Byob),
-            }) => ReadableStreamReader::acquire_readable_stream_byob_reader(ctx.clone(), stream)?,
+            }))) => ReadableStreamReader::acquire_readable_stream_byob_reader(ctx.clone(), stream)?,
         }
 
         // tricky dance; OwnedBorrowMut values aren't cloneable but JS values are
@@ -372,8 +367,9 @@ impl<'js> ReadableStream<'js> {
 
     fn readable_stream_close(
         &mut self,
+        ctx: Ctx<'js>,
         // Let reader be stream.[[reader]].
-        reader: Option<&ReadableStreamReaderOwnedBorrowMut>,
+        reader: Option<&ReadableStreamReaderOwnedBorrowMut<'js>>,
     ) -> Result<()> {
         // Set stream.[[state]] to "closed".
         self.state = ReadableStreamState::Closed;
@@ -389,7 +385,7 @@ impl<'js> ReadableStream<'js> {
                     .resolve_closed_promise
                     .as_ref()
                     .expect("ReadableStreamClose called without resolution function")
-                    .call((Undefined,))?;
+                    .call((Value::new_undefined(ctx),))?;
 
                 // If reader implements ReadableStreamDefaultReader,
                 // Let readRequests be reader.[[readRequests]].
@@ -404,7 +400,7 @@ impl<'js> ReadableStream<'js> {
                     .resolve_closed_promise
                     .as_ref()
                     .expect("ReadableStreamClose called without resolution function")
-                    .call((Undefined,))?;
+                    .call((Value::new_undefined(ctx),))?;
             },
         }
 
@@ -436,7 +432,7 @@ impl<'js> ReadableStream<'js> {
     }
 
     fn readable_stream_cancel(
-        ctx: &Ctx<'js>,
+        ctx: Ctx<'js>,
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         reason: Value<'js>,
@@ -447,12 +443,12 @@ impl<'js> ReadableStream<'js> {
         match stream.state {
             // If stream.[[state]] is "closed", return a promise resolved with undefined.
             ReadableStreamState::Closed => {
-                return promise_resolved_with(ctx, Ok(Value::new_undefined(ctx.clone())));
+                return promise_resolved_with(&ctx, Ok(Value::new_undefined(ctx.clone())));
             },
             // If stream.[[state]] is "errored", return a promise rejected with stream.[[storedError]].
             ReadableStreamState::Errored => {
                 return promise_rejected_with(
-                    ctx,
+                    &ctx,
                     stream
                         .stored_error
                         .clone()
@@ -461,7 +457,7 @@ impl<'js> ReadableStream<'js> {
             },
             ReadableStreamState::Readable => {
                 // Perform ! ReadableStreamClose(stream).
-                stream.readable_stream_close(reader.as_ref())?;
+                stream.readable_stream_close(ctx.clone(), reader.as_ref())?;
                 // Let reader be stream.[[reader]].
                 // If reader is not undefined and reader implements ReadableStreamBYOBReader,
                 if let Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(
@@ -474,7 +470,9 @@ impl<'js> ReadableStream<'js> {
                     // For each readIntoRequest of readIntoRequests,
                     for read_into_request in read_into_requests {
                         // Perform readIntoRequest’s close steps, given undefined.
-                        read_into_request.close_steps.call((Undefined,))?
+                        read_into_request
+                            .close_steps
+                            .call((Value::new_undefined(ctx.clone()),))?
                     }
                 }
 
@@ -484,12 +482,13 @@ impl<'js> ReadableStream<'js> {
                     .expect("ReadableStreamCancel called without a controller");
 
                 // Let sourceCancelPromise be ! stream.[[controller]].[[CancelSteps]](reason).
-                let source_cancel_promise = controller.cancel_steps(ctx, stream, reader, reason)?;
+                let source_cancel_promise =
+                    controller.cancel_steps(&ctx, stream, reader, reason)?;
 
                 // Return the result of reacting to sourceCancelPromise with a fulfillment step that returns undefined.
                 source_cancel_promise.then()?.call((
                     This(source_cancel_promise.clone()),
-                    Function::new(ctx.clone(), || Undefined)?,
+                    Function::new(ctx.clone(), move || Value::new_undefined(ctx.clone()))?,
                 ))
             },
         }
@@ -516,6 +515,7 @@ impl<'js> ReadableStream<'js> {
     }
 }
 
+#[derive(Default)]
 struct UnderlyingSource<'js> {
     // callback UnderlyingSourceStartCallback = any (ReadableStreamController controller);
     start: Option<Function<'js>>,
@@ -528,13 +528,8 @@ struct UnderlyingSource<'js> {
     auto_allocate_chunk_size: Option<usize>,
 }
 
-impl<'js> FromJs<'js> for UnderlyingSource<'js> {
-    fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
-        let ty_name = value.type_name();
-        let obj = value
-            .as_object()
-            .ok_or(Error::new_from_js(ty_name, "Object"))?;
-
+impl<'js> UnderlyingSource<'js> {
+    fn from_object(obj: Object<'js>) -> Result<Self> {
         let start = obj.get_optional::<_, _>("start")?;
         let pull = obj.get_optional::<_, _>("pull")?;
         let cancel = obj.get_optional::<_, _>("cancel")?;
@@ -558,14 +553,22 @@ enum ReadableStreamType {
 
 impl<'js> FromJs<'js> for ReadableStreamType {
     fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
-        let ty_name = value.type_name();
-        let str = value
-            .as_string()
-            .ok_or(Error::new_from_js(ty_name, "String"))?;
+        let typ = value.type_of();
+        let str = match typ {
+            Type::String => value.into_string().unwrap(),
+            Type::Object => {
+                if let Some(to_string) = value.get_optional::<_, Function>("toString")? {
+                    to_string.call(())?
+                } else {
+                    return Err(Error::new_from_js("Object", "String"));
+                }
+            },
+            typ => return Err(Error::new_from_js(typ.as_str(), "String")),
+        };
 
         match str.to_string()?.as_str() {
             "bytes" => Ok(Self::Bytes),
-            _ => Err(Error::new_from_js(ty_name, "ReadableStreamType")),
+            _ => Err(Error::new_from_js(typ.as_str(), "ReadableStreamType")),
         }
     }
 }
@@ -792,7 +795,7 @@ impl<'js> ReadableStreamGenericReader<'js> {
         };
 
         // Return ! ReadableStreamCancel(stream, reason).
-        ReadableStream::readable_stream_cancel(&ctx, stream, Some(reader), reason)
+        ReadableStream::readable_stream_cancel(ctx, stream, Some(reader), reason)
     }
 }
 
@@ -1123,9 +1126,11 @@ fn upon_promise<'js, Input: FromJs<'js> + 'js, Output: IntoJs<'js> + 'js>(
 }
 
 fn set_promise_is_handled_to_true<'js>(ctx: Ctx<'js>, promise: &Promise<'js>) -> Result<()> {
-    promise
-        .then()?
-        .call((This(promise.clone()), Undefined, Function::new(ctx, || {})))
+    promise.then()?.call((
+        This(promise.clone()),
+        Value::new_undefined(ctx.clone()),
+        Function::new(ctx, || {}),
+    ))
 }
 
 #[derive(Trace, Clone)]
@@ -1147,7 +1152,7 @@ enum StartAlgorithm<'js> {
     ReturnUndefined,
     Function {
         f: Function<'js>,
-        underlying_source: Value<'js>,
+        underlying_source: Null<Undefined<Object<'js>>>,
     },
 }
 
@@ -1168,7 +1173,7 @@ enum PullAlgorithm<'js> {
     ReturnPromiseUndefined,
     Function {
         f: Function<'js>,
-        underlying_source: Value<'js>,
+        underlying_source: Null<Undefined<Object<'js>>>,
     },
 }
 
@@ -1199,7 +1204,7 @@ enum CancelAlgorithm<'js> {
     ReturnPromiseUndefined,
     Function {
         f: Function<'js>,
-        underlying_source: Value<'js>,
+        underlying_source: Null<Undefined<Object<'js>>>,
     },
 }
 
@@ -1254,4 +1259,83 @@ fn class_from_owned_borrow_mut<'js, T: JsClass<'js>>(
     let class = borrow.into_inner();
     let borrow = OwnedBorrowMut::from_class(class.clone());
     (class, borrow)
+}
+
+/// Helper type for converting an option into null instead of undefined.
+#[derive(Clone)]
+struct Null<T>(pub Option<T>);
+
+impl<'js, T: IntoJs<'js>> IntoJs<'js> for Null<T> {
+    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
+        match self.0 {
+            None => Ok(Value::new_null(ctx.clone())),
+            Some(val) => val.into_js(ctx),
+        }
+    }
+}
+
+impl<'js, T: Trace<'js>> Trace<'js> for Null<T> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        self.0.trace(tracer)
+    }
+}
+
+/// Helper type for treating an undefined value as None, but not null
+#[derive(Clone)]
+struct Undefined<T>(pub Option<T>);
+
+impl<'js, T: FromJs<'js>> FromJs<'js> for Undefined<T> {
+    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+        if value.type_of() == Type::Undefined {
+            Ok(Self(None))
+        } else {
+            Ok(Self(Some(FromJs::from_js(ctx, value)?)))
+        }
+    }
+}
+
+impl<T> Default for Undefined<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<'js, T: Trace<'js>> Trace<'js> for Undefined<T> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        self.0.trace(tracer)
+    }
+}
+
+impl<'js, T: IntoJs<'js>> IntoJs<'js> for Undefined<T> {
+    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
+        match self.0 {
+            None => Ok(Value::new_undefined(ctx.clone())),
+            Some(val) => val.into_js(ctx),
+        }
+    }
+}
+
+// the trait used elsewhere in this repo accepts null values as 'None', which causes many web platform tests to fail as they
+// like to check that undefined is accepted and null isn't.
+pub trait ObjectExt<'js> {
+    fn get_optional<K: IntoAtom<'js> + Clone, V: FromJs<'js>>(&self, k: K) -> Result<Option<V>>;
+}
+
+impl<'js> ObjectExt<'js> for Object<'js> {
+    fn get_optional<K: IntoAtom<'js> + Clone, V: FromJs<'js> + Sized>(
+        &self,
+        k: K,
+    ) -> Result<Option<V>> {
+        let value = self.get::<K, Value<'js>>(k)?;
+        Ok(Undefined::from_js(self.ctx(), value)?.0)
+    }
+}
+
+impl<'js> ObjectExt<'js> for Value<'js> {
+    fn get_optional<K: IntoAtom<'js> + Clone, V: FromJs<'js>>(&self, k: K) -> Result<Option<V>> {
+        if let Some(obj) = self.as_object() {
+            return obj.get_optional(k);
+        }
+        Ok(None)
+    }
 }

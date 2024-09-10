@@ -478,6 +478,14 @@ describe("web-platform-tests", () => {
           done
         );
       });
+
+      it("should pass general.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/general.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });

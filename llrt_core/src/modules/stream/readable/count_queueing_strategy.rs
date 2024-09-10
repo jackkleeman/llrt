@@ -1,5 +1,6 @@
-use llrt_utils::object::ObjectExt;
 use rquickjs::{class::Trace, methods, Ctx, Error, FromJs, Function, Result, Value};
+
+use super::ObjectExt;
 
 #[derive(Trace)]
 #[rquickjs::class]
