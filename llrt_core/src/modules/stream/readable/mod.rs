@@ -21,6 +21,7 @@ mod byte_controller;
 mod count_queueing_strategy;
 mod default_controller;
 mod default_reader;
+mod tee;
 
 pub(crate) use byob_reader::ReadableStreamBYOBReader;
 pub(crate) use count_queueing_strategy::CountQueuingStrategy;
@@ -36,7 +37,7 @@ pub struct ReadableStream<'js> {
     stored_error: Option<Value<'js>>,
 }
 
-#[derive(Trace, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Trace, Clone, Copy, PartialEq, Eq)]
 enum ReadableStreamState {
     Readable,
     Closed,
@@ -51,7 +52,7 @@ impl<'js> ReadableStream<'js> {
     fn new(
         ctx: Ctx<'js>,
         underlying_source: Opt<Undefined<Object<'js>>>,
-        queuing_strategy: Opt<QueuingStrategy<'js>>,
+        queuing_strategy: Opt<Undefined<QueuingStrategy<'js>>>,
     ) -> Result<Class<'js, Self>> {
         // If underlyingSource is missing, set it to null.
         let underlying_source = Null(underlying_source.0);
@@ -76,13 +77,13 @@ impl<'js> ReadableStream<'js> {
             },
         )?;
         let stream = OwnedBorrowMut::from_class(stream_class.clone());
+        let queuing_strategy = queuing_strategy.0.and_then(|qs| qs.0);
 
         match underlying_source_dict.r#type {
             // If underlyingSourceDict["type"] is "bytes":
             Some(ReadableStreamType::Bytes) => {
                 // If strategy["size"] exists, throw a RangeError exception.
                 if queuing_strategy
-                    .0
                     .as_ref()
                     .and_then(|qs| qs.size.as_ref())
                     .is_some()
@@ -94,8 +95,7 @@ impl<'js> ReadableStream<'js> {
                 }
                 // Let highWaterMark be ? ExtractHighWaterMark(strategy, 0).
                 let high_water_mark =
-                    QueuingStrategy::extract_high_water_mark(&ctx, &queuing_strategy, 0.0)?
-                        as usize;
+                    QueuingStrategy::extract_high_water_mark(&ctx, queuing_strategy, 0.0)? as usize;
 
                 // Perform ? SetUpReadableByteStreamControllerFromUnderlyingSource(this, underlyingSource, underlyingSourceDict, highWaterMark).
                 byte_controller::ReadableStreamByteController::set_up_readable_byte_stream_controller_from_underlying_source(
@@ -109,11 +109,12 @@ impl<'js> ReadableStream<'js> {
             // Otherwise,
             None => {
                 // Let sizeAlgorithm be ! ExtractSizeAlgorithm(strategy).
-                let size_algorithm = QueuingStrategy::extract_size_algorithm(&queuing_strategy);
+                let size_algorithm =
+                    QueuingStrategy::extract_size_algorithm(queuing_strategy.as_ref());
 
                 // Let highWaterMark be ? ExtractHighWaterMark(strategy, 1).
                 let high_water_mark =
-                    QueuingStrategy::extract_high_water_mark(&ctx, &queuing_strategy, 1.0)?;
+                    QueuingStrategy::extract_high_water_mark(&ctx, queuing_strategy, 1.0)?;
 
                 // Perform ? SetUpReadableStreamDefaultControllerFromUnderlyingSource(this, underlyingSource, underlyingSourceDict, highWaterMark, sizeAlgorithm).
                 ReadableStreamDefaultController::set_up_readable_stream_default_controller_from_underlying_source(
@@ -156,38 +157,40 @@ impl<'js> ReadableStream<'js> {
             return promise_rejected_with(&ctx, e);
         }
         let reader = stream.reader_mut();
-        Self::readable_stream_cancel(
+        let (promise, _, _) = Self::readable_stream_cancel(
             ctx.clone(),
             stream.0,
             reader,
             reason.0.unwrap_or(Value::new_undefined(ctx)),
-        )
+        )?;
+        Ok(promise)
     }
 
     // ReadableStreamReader getReader(optional ReadableStreamGetReaderOptions options = {});
     fn get_reader(
         ctx: Ctx<'js>,
         stream: This<OwnedBorrowMut<'js, Self>>,
-        options: Opt<Undefined<ReadableStreamGetReaderOptions>>,
-    ) -> Result<Value<'js>> {
-        let (stream_class, stream) = class_from_owned_borrow_mut(stream.0);
+        options: Opt<Option<ReadableStreamGetReaderOptions>>,
+    ) -> Result<ReadableStreamReader<'js>> {
         // If options["mode"] does not exist, return ? AcquireReadableStreamDefaultReader(this).
-        match options.0 {
-            None | Some(Undefined(None | Some(ReadableStreamGetReaderOptions { mode: None }))) => {
-                ReadableStreamReader::acquire_readable_stream_default_reader(ctx.clone(), stream)?
+        let reader = match options.0 {
+            None | Some(None | Some(ReadableStreamGetReaderOptions { mode: None })) => {
+                ReadableStreamReader::ReadableStreamDefaultReader(
+                    ReadableStreamReader::acquire_readable_stream_default_reader(
+                        ctx.clone(),
+                        stream.0,
+                    )?,
+                )
             },
             // Return ? AcquireReadableStreamBYOBReader(this).
-            Some(Undefined(Some(ReadableStreamGetReaderOptions {
+            Some(Some(ReadableStreamGetReaderOptions {
                 mode: Some(ReadableStreamReaderMode::Byob),
-            }))) => ReadableStreamReader::acquire_readable_stream_byob_reader(ctx.clone(), stream)?,
-        }
+            })) => ReadableStreamReader::ReadableStreamBYOBReader(
+                ReadableStreamReader::acquire_readable_stream_byob_reader(ctx.clone(), stream.0)?,
+            ),
+        };
 
-        // tricky dance; OwnedBorrowMut values aren't cloneable but JS values are
-        let mut stream = OwnedBorrowMut::from_class(stream_class);
-        let reader = stream.reader.take().unwrap();
-        let value = reader.into_js(&ctx)?;
-        stream.reader = Some(FromJs::from_js(&ctx, value.clone())?);
-        Ok(value)
+        Ok(reader)
     }
 
     // ReadableStream pipeThrough(ReadableWritablePair transform, optional StreamPipeOptions options = {});
@@ -209,8 +212,12 @@ impl<'js> ReadableStream<'js> {
     }
 
     // sequence<ReadableStream> tee();
-    fn tee(&self) -> List<(Class<'js, Self>, Class<'js, Self>)> {
-        unimplemented!()
+    fn tee(
+        ctx: Ctx<'js>,
+        stream: This<OwnedBorrowMut<'js, Self>>,
+    ) -> Result<List<(Class<'js, Self>, Class<'js, Self>)>> {
+        // Return ? ReadableStreamTee(this, false).
+        Ok(List(Self::readable_stream_tee(ctx, stream.0, false)?))
     }
 }
 
@@ -306,12 +313,16 @@ impl<'js> ReadableStream<'js> {
     }
 
     fn readable_stream_fulfill_read_request(
-        &mut self,
+        ctx: &Ctx<'js>,
+        mut stream: OwnedBorrowMut<'js, Self>,
         // Let reader be stream.[[reader]].
-        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         chunk: Value<'js>,
         done: bool,
-    ) -> Result<()> {
+    ) -> Result<(
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
         // Assert: ! ReadableStreamHasDefaultReader(stream) is true.
         let read_requests = match reader {
             Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(ref mut  r)) => &mut r.read_requests,
@@ -326,17 +337,18 @@ impl<'js> ReadableStream<'js> {
 
         if done {
             // If done is true, perform readRequest’s close steps.
-            read_request.close_steps.call(())?;
+            read_request.close_steps(ctx)?;
         } else {
             // Otherwise, perform readRequest’s chunk steps, given chunk.
-            read_request.chunk_steps.call((chunk,))?;
+            (stream, reader) = read_request.chunk_steps(stream, reader, chunk)?;
         }
 
-        Ok(())
+        Ok((stream, reader))
     }
 
     fn readable_stream_fulfill_read_into_request(
         &mut self,
+        ctx: &Ctx<'js>,
         reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         chunk: ObjectBytes<'js>,
         done: bool,
@@ -356,10 +368,10 @@ impl<'js> ReadableStream<'js> {
 
         if done {
             // If done is true, perform readIntoRequest’s close steps, given chunk.
-            read_into_request.close_steps.call((chunk,))?;
+            read_into_request.close_steps(chunk.into_js(ctx)?)?;
         } else {
             // Otherwise, perform readIntoRequest’s chunk steps, given chunk.
-            read_into_request.chunk_steps.call((chunk,))?;
+            read_into_request.chunk_steps(chunk.into_js(ctx)?)?;
         }
 
         Ok(())
@@ -369,7 +381,7 @@ impl<'js> ReadableStream<'js> {
         &mut self,
         ctx: Ctx<'js>,
         // Let reader be stream.[[reader]].
-        reader: Option<&ReadableStreamReaderOwnedBorrowMut<'js>>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
     ) -> Result<()> {
         // Set stream.[[state]] to "closed".
         self.state = ReadableStreamState::Closed;
@@ -385,14 +397,15 @@ impl<'js> ReadableStream<'js> {
                     .resolve_closed_promise
                     .as_ref()
                     .expect("ReadableStreamClose called without resolution function")
-                    .call((Value::new_undefined(ctx),))?;
+                    .call((Value::new_undefined(ctx.clone()),))?;
 
                 // If reader implements ReadableStreamDefaultReader,
                 // Let readRequests be reader.[[readRequests]].
+                // Set reader.[[readRequests]] to an empty list.
                 // For each readRequest of readRequests,
-                for read_request in &r.read_requests {
+                for read_request in r.read_requests.split_off(0) {
                     // Perform readRequest’s close steps.
-                    read_request.close_steps.call(())?;
+                    read_request.close_steps(&ctx)?;
                 }
             },
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(r) => {
@@ -418,10 +431,10 @@ impl<'js> ReadableStream<'js> {
 
     fn readable_stream_add_read_request(
         &mut self,
-        reader: &mut ReadableStreamReaderOwnedBorrowMut<'js>,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         read_request: ReadableStreamReadRequest<'js>,
     ) {
-        match reader {
+        match reader.expect("ReadableStreamAddReadRequest called without reader") {
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(_) => {
                 panic!("ReadableStreamAddReadRequest called with byob reader")
             },
@@ -436,28 +449,36 @@ impl<'js> ReadableStream<'js> {
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         reason: Value<'js>,
-    ) -> Result<Promise<'js>> {
+    ) -> Result<(
+        Promise<'js>,
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
         // Set stream.[[disturbed]] to true.
         stream.disturbed = true;
 
         match stream.state {
             // If stream.[[state]] is "closed", return a promise resolved with undefined.
-            ReadableStreamState::Closed => {
-                return promise_resolved_with(&ctx, Ok(Value::new_undefined(ctx.clone())));
-            },
+            ReadableStreamState::Closed => Ok((
+                promise_resolved_with(&ctx, Ok(Value::new_undefined(ctx.clone())))?,
+                stream,
+                reader,
+            )),
             // If stream.[[state]] is "errored", return a promise rejected with stream.[[storedError]].
-            ReadableStreamState::Errored => {
-                return promise_rejected_with(
+            ReadableStreamState::Errored => Ok((
+                promise_rejected_with(
                     &ctx,
                     stream
                         .stored_error
                         .clone()
                         .expect("ReadableStream in errored state without a stored error"),
-                );
-            },
+                )?,
+                stream,
+                reader,
+            )),
             ReadableStreamState::Readable => {
                 // Perform ! ReadableStreamClose(stream).
-                stream.readable_stream_close(ctx.clone(), reader.as_ref())?;
+                stream.readable_stream_close(ctx.clone(), reader.as_mut())?;
                 // Let reader be stream.[[reader]].
                 // If reader is not undefined and reader implements ReadableStreamBYOBReader,
                 if let Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(
@@ -470,9 +491,7 @@ impl<'js> ReadableStream<'js> {
                     // For each readIntoRequest of readIntoRequests,
                     for read_into_request in read_into_requests {
                         // Perform readIntoRequest’s close steps, given undefined.
-                        read_into_request
-                            .close_steps
-                            .call((Value::new_undefined(ctx.clone()),))?
+                        read_into_request.close_steps(Value::new_undefined(ctx.clone()))?
                     }
                 }
 
@@ -482,13 +501,19 @@ impl<'js> ReadableStream<'js> {
                     .expect("ReadableStreamCancel called without a controller");
 
                 // Let sourceCancelPromise be ! stream.[[controller]].[[CancelSteps]](reason).
-                let source_cancel_promise =
+                let (source_cancel_promise, stream, reader) =
                     controller.cancel_steps(&ctx, stream, reader, reason)?;
 
                 // Return the result of reacting to sourceCancelPromise with a fulfillment step that returns undefined.
-                source_cancel_promise.then()?.call((
+                let promise = source_cancel_promise.then()?.call((
                     This(source_cancel_promise.clone()),
                     Function::new(ctx.clone(), move || Value::new_undefined(ctx.clone()))?,
+                ))?;
+
+                Ok((
+                    promise,
+                    OwnedBorrowMut::from_class(stream),
+                    reader.map(|mut r| r.borrow_mut()),
                 ))
             },
         }
@@ -508,6 +533,58 @@ impl<'js> ReadableStream<'js> {
                 panic!("ReadableStreamAddReadIntoRequest called on stream without ReadableStreamBYOBReader");
             },
         }
+    }
+
+    // CreateReadableStream(startAlgorithm, pullAlgorithm, cancelAlgorithm[, highWaterMark, [, sizeAlgorithm]]) performs the following steps:
+    fn create_readable_stream(
+        ctx: Ctx<'js>,
+        start_algorithm: StartAlgorithm<'js>,
+        pull_algorithm: PullAlgorithm<'js>,
+        cancel_algorithm: CancelAlgorithm<'js>,
+        high_water_mark: Option<f64>,
+        size_algorithm: Option<SizeAlgorithm<'js>>,
+    ) -> Result<Class<'js, Self>> {
+        // If highWaterMark was not passed, set it to 1.
+        let high_water_mark = high_water_mark.unwrap_or(1.0);
+
+        // If sizeAlgorithm was not passed, set it to an algorithm that returns 1.
+        let size_algorithm = size_algorithm.unwrap_or(SizeAlgorithm::AlwaysOne);
+
+        // Assert: ! IsNonNegativeNumber(highWaterMark) is true.
+
+        // Let stream be a new ReadableStream.
+        let stream_class = Class::instance(
+            ctx.clone(),
+            Self {
+                // Set stream.[[state]] to "readable".
+                state: ReadableStreamState::Readable,
+                // Set stream.[[reader]] and stream.[[storedError]] to undefined.
+                reader: None,
+                stored_error: None,
+                // Set stream.[[disturbed]] to false.
+                disturbed: false,
+                controller: None,
+            },
+        )?;
+
+        // Let controller be a new ReadableStreamDefaultController.
+        let controller =
+            OwnedBorrowMut::from_class(Class::instance(ctx.clone(), Default::default())?);
+
+        // Perform ? SetUpReadableStreamDefaultController(stream, controller, startAlgorithm, pullAlgorithm, cancelAlgorithm, highWaterMark, sizeAlgorithm).
+        ReadableStreamDefaultController::set_up_readable_stream_default_controller(
+            ctx,
+            controller,
+            OwnedBorrowMut::from_class(stream_class.clone()),
+            start_algorithm,
+            pull_algorithm,
+            cancel_algorithm,
+            high_water_mark,
+            size_algorithm,
+        )?;
+
+        // Return stream.
+        Ok(stream_class)
     }
 
     fn reader_mut(&mut self) -> Option<ReadableStreamReaderOwnedBorrowMut<'js>> {
@@ -601,7 +678,7 @@ impl<'js> QueuingStrategy<'js> {
     // https://streams.spec.whatwg.org/#validate-and-normalize-high-water-mark
     fn extract_high_water_mark(
         ctx: &Ctx<'js>,
-        this: &Option<QueuingStrategy<'js>>,
+        this: Option<QueuingStrategy<'js>>,
         default_hwm: f64,
     ) -> Result<f64> {
         match this {
@@ -627,7 +704,7 @@ impl<'js> QueuingStrategy<'js> {
     }
 
     // https://streams.spec.whatwg.org/#make-size-algorithm-from-size-function
-    fn extract_size_algorithm(this: &Option<QueuingStrategy<'js>>) -> SizeAlgorithm<'js> {
+    fn extract_size_algorithm(this: Option<&QueuingStrategy<'js>>) -> SizeAlgorithm<'js> {
         // If strategy["size"] does not exist, return an algorithm that returns 1.
         match this.as_ref().and_then(|t| t.size.as_ref()) {
             None => SizeAlgorithm::AlwaysOne,
@@ -795,7 +872,9 @@ impl<'js> ReadableStreamGenericReader<'js> {
         };
 
         // Return ! ReadableStreamCancel(stream, reason).
-        ReadableStream::readable_stream_cancel(ctx, stream, Some(reader), reason)
+        let (promise, _, _) =
+            ReadableStream::readable_stream_cancel(ctx, stream, Some(reader), reason)?;
+        Ok(promise)
     }
 }
 
@@ -900,17 +979,15 @@ impl<'js> ReadableStreamReader<'js> {
     fn acquire_readable_stream_default_reader(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-    ) -> Result<()> {
-        ReadableStreamDefaultReader::new(ctx, stream)?;
-        Ok(())
+    ) -> Result<Class<'js, ReadableStreamDefaultReader<'js>>> {
+        ReadableStreamDefaultReader::new(ctx, stream)
     }
 
     fn acquire_readable_stream_byob_reader(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-    ) -> Result<()> {
-        ReadableStreamBYOBReader::new(ctx, stream)?;
-        Ok(())
+    ) -> Result<Class<'js, ReadableStreamBYOBReader<'js>>> {
+        ReadableStreamBYOBReader::new(ctx, stream)
     }
 }
 
@@ -977,8 +1054,8 @@ impl<'js> ReadableStreamController<'js> {
     fn pull_steps(
         &self,
         ctx: &Ctx<'js>,
-        reader: ReadableStreamReaderOwnedBorrowMut<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        reader: ReadableStreamReaderOwnedBorrowMut<'js>,
         read_request: ReadableStreamReadRequest<'js>,
     ) -> Result<()> {
         match self {
@@ -987,8 +1064,8 @@ impl<'js> ReadableStreamController<'js> {
                 ReadableStreamDefaultController::pull_steps(
                     ctx,
                     controller,
-                    reader,
                     stream,
+                    Some(reader),
                     read_request,
                 )
             },
@@ -1011,7 +1088,11 @@ impl<'js> ReadableStreamController<'js> {
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         reason: Value<'js>,
-    ) -> Result<Promise<'js>> {
+    ) -> Result<(
+        Promise<'js>,
+        Class<'js, ReadableStream<'js>>,
+        Option<ReadableStreamReader<'js>>,
+    )> {
         match self {
             Self::ReadableStreamDefaultController(c) => {
                 let controller = OwnedBorrowMut::from_class(c.clone());
@@ -1148,6 +1229,7 @@ impl<'js> SizeAlgorithm<'js> {
     }
 }
 
+#[derive(Clone)]
 enum StartAlgorithm<'js> {
     ReturnUndefined,
     Function {
@@ -1226,15 +1308,55 @@ impl<'js> CancelAlgorithm<'js> {
     }
 }
 
-#[derive(Trace, Clone)]
 struct ReadableStreamReadRequest<'js> {
-    chunk_steps: Function<'js>,
-    close_steps: Function<'js>,
-    error_steps: Function<'js>,
+    chunk_steps: Box<
+        dyn FnOnce(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+                Value<'js>,
+            ) -> Result<(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+            )> + 'js,
+    >,
+    close_steps: Box<dyn FnOnce(&Ctx<'js>) -> Result<()> + 'js>,
+    error_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
+    trace: Box<dyn Fn(Tracer<'_, 'js>) + 'js>,
+}
+
+impl<'js> ReadableStreamReadRequest<'js> {
+    fn chunk_steps(
+        self,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        chunk: Value<'js>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
+        let chunk_steps = self.chunk_steps;
+        chunk_steps(stream, reader, chunk)
+    }
+
+    fn close_steps(self, ctx: &Ctx<'js>) -> Result<()> {
+        let close_steps = self.close_steps;
+        close_steps(ctx)
+    }
+
+    fn error_steps(self, reason: Value<'js>) -> Result<()> {
+        let error_steps = self.error_steps;
+        error_steps(reason)
+    }
+}
+
+impl<'js> Trace<'js> for ReadableStreamReadRequest<'js> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        (self.trace)(tracer)
+    }
 }
 
 struct ReadableStreamReadResult<'js> {
-    value: Value<'js>,
+    value: Option<Value<'js>>,
     done: bool,
 }
 

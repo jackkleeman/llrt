@@ -5,7 +5,7 @@ use rquickjs::{
     class::{OwnedBorrowMut, Trace},
     methods,
     prelude::Opt,
-    Class, Ctx, Exception, Function, Promise, Result, Value,
+    Class, Ctx, Exception, Promise, Result, Value,
 };
 
 use super::{
@@ -34,13 +34,13 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         // For each readRequest of readRequests,
         for read_request in read_requests {
             // Perform readRequest’s error steps, given e.
-            read_request.error_steps.call((e.clone(),))?;
+            read_request.error_steps(e.clone())?;
         }
 
         Ok(())
     }
 
-    fn readable_stream_default_reader_read(
+    pub(super) fn readable_stream_default_reader_read<'closure>(
         ctx: &Ctx<'js>,
         reader: OwnedBorrowMut<'js, Self>,
         // Let stream be reader.[[stream]].
@@ -51,12 +51,15 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         stream.disturbed = true;
         match stream.state {
             // If stream.[[state]] is "closed", perform readRequest’s close steps.
-            ReadableStreamState::Closed => read_request.close_steps.call(())?,
+            ReadableStreamState::Closed => read_request.close_steps(ctx)?,
             // Otherwise, if stream.[[state]] is "errored", perform readRequest’s error steps given stream.[[storedError]].
             ReadableStreamState::Errored => {
-                read_request
-                    .error_steps
-                    .call((stream.stored_error.clone(),))?;
+                read_request.error_steps(
+                    stream
+                        .stored_error
+                        .clone()
+                        .expect("stream in error state without stored error"),
+                )?;
             },
             // Otherwise,
             _ => {
@@ -69,8 +72,8 @@ impl<'js> ReadableStreamDefaultReader<'js> {
 
                 controller.pull_steps(
                     ctx,
-                    ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(reader),
                     stream,
+                    ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(reader),
                     read_request,
                 )?;
             },
@@ -154,33 +157,41 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         let read_request = ReadableStreamReadRequest {
             // chunk steps, given chunk
             // Resolve promise with «[ "value" → chunk, "done" → false ]».
-            chunk_steps: Function::new(ctx.clone(), {
+            chunk_steps: {
                 let resolve = resolve.clone();
-                move |chunk: Value<'js>| -> Result<()> {
-                    resolve.call((ReadableStreamReadResult {
-                        value: chunk,
+                Box::new(move |stream, reader, chunk: Value<'js>| {
+                    () = resolve.call((ReadableStreamReadResult {
+                        value: Some(chunk),
                         done: false,
-                    },))
-                }
-            })?,
+                    },))?;
+                    Ok((stream, reader))
+                })
+            },
             // close steps
             // Resolve promise with «[ "value" → undefined, "done" → true ]».
-            close_steps: Function::new(ctx.clone(), {
+            close_steps: {
                 let resolve = resolve.clone();
-                let ctx = ctx.clone();
-                move || -> Result<()> {
+                Box::new(move |_| -> Result<()> {
                     resolve.call((ReadableStreamReadResult {
-                        value: Value::new_undefined(ctx.clone()),
+                        value: None,
                         done: true,
                     },))
-                }
-            })?,
+                })
+            },
             // error steps, given e
             // Reject promise with e.
-            error_steps: Function::new(ctx.clone(), {
+            error_steps: {
                 let reject = reject.clone();
-                move |e: Value<'js>| -> Result<()> { reject.call((e,)) }
-            })?,
+                Box::new(move |e: Value<'js>| -> Result<()> { reject.call((e,)) })
+            },
+            trace: {
+                let resolve = resolve.clone();
+                let reject = reject.clone();
+                Box::new(move |tracer| {
+                    resolve.trace(tracer);
+                    reject.trace(tracer);
+                })
+            },
         };
 
         // Perform ! ReadableStreamDefaultReaderRead(this, readRequest).

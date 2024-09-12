@@ -4,6 +4,11 @@
 // META: script=../resources/test-utils.js
 'use strict';
 
+export default function(ctx) {
+const { promise_test, assert_equals, assert_throws_js, assert_true, assert_not_equals, promise_rejects_exactly, assert_array_equals, assert_false } = ctx;
+
+require("../resources/recording-streams.js").default(ctx);
+
 // The size() function of the readable strategy can re-entrantly call back into the ReadableStream implementation. This
 // makes it risky to cache state across the call to ReadableStreamDefaultControllerEnqueue. These tests attempt to catch
 // such errors. They are separated from the other strategy tests because no real user code should ever do anything like
@@ -262,3 +267,5 @@ promise_test(() => {
     readableStreamToArray(branch2).then(array => assert_array_equals(array, ['a'], 'branch2 should have one chunk'))
   ]);
 }, 'tee() inside size() should work');
+
+};

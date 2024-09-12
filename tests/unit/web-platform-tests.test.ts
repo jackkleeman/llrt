@@ -486,6 +486,56 @@ describe("web-platform-tests", () => {
           done
         );
       });
+
+      it("should pass general.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/general.any.js")
+            .default,
+          done
+        );
+      });
+
+      // it("should pass owning-type.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-streams/owning-type.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // needs writeable
+      // it("should pass patched-global.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-streams/patched-global.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // needs writeable
+      // it("should pass reentrant-strategies.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-streams/reentrant-strategies.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      it("should pass tee.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/tee.any.js")
+            .default,
+          done
+        );
+      });
+
+      it("should pass templated.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/templated.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });

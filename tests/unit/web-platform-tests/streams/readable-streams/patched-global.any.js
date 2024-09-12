@@ -1,6 +1,9 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function(ctx) {
+const { promise_test, test, assert_true } = ctx;
+
 // Tests which patch the global environment are kept separate to avoid
 // interfering with other tests.
 
@@ -140,3 +143,5 @@ test(t => {
   rs.pipeTo(ws);
   readableController.close();
 }, 'pipeTo() should not call Promise.prototype.then()');
+
+};

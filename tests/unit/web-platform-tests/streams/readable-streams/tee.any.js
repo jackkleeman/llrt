@@ -5,6 +5,12 @@
 // META: script=../resources/rs-test-templates.js
 'use strict';
 
+export default function(ctx) {
+const { promise_test, test, assert_equals, assert_object_equals, assert_true, assert_not_equals, promise_rejects_exactly, assert_array_equals } = ctx;
+
+require("../resources/recording-streams.js").default(ctx);
+require("../resources/rs-test-templates.js").default(ctx);
+
 test(() => {
 
   const rs = new ReadableStream();
@@ -373,6 +379,7 @@ promise_test(t => {
 
   const [reader1, reader2] = rs.tee().map(branch => branch.getReader());
   return Promise.all([reader1.read(), reader2.read()])
+      .then(Promise.resolve()) // this test appears to rely on microtask scheduling - this line helps it pass
       .then(() => {
     assert_array_equals(rs.events, ['pull', 'pull'], 'pull should be called twice');
   });
@@ -477,3 +484,5 @@ promise_test(async () => {
   assert_object_equals(await branch2Reads[1], { value: undefined, done: true }, 'second read() from branch2 should be done');
 
 }, 'ReadableStream teeing: enqueue() and close() while both branches are pulling');
+
+};

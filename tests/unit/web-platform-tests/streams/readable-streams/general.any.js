@@ -4,7 +4,7 @@
 'use strict';
 
 export default function(ctx) {
-const { promise_test, test, assert_equals, assert_object_equals, assert_throws_js, assert_true, assert_not_equals, promise_rejects_exactly, assert_throws_exactly, assert_array_equals, assert_false } = ctx;
+const { promise_test, test, assert_equals, assert_object_equals, assert_throws_js, assert_true, assert_not_equals, promise_rejects_exactly, assert_throws_exactly, assert_array_equals, assert_false, assert_unreached } = ctx;
 
 const error1 = new Error('error1');
 error1.name = 'error1';

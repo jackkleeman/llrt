@@ -3,6 +3,11 @@
 // META: script=../resources/rs-test-templates.js
 'use strict';
 
+export default function(ctx) {
+  
+require("../resources/rs-test-templates.js").default(ctx);
+  
+
 // Run the readable stream test templates against readable streams created directly using the constructor
 
 const theError = { name: 'boo!' };
@@ -141,3 +146,5 @@ templatedRSTwoChunksClosedReader('ReadableStream (two chunks enqueued, then clos
 function streamAndDefaultReader(stream) {
   return { stream, reader: stream.getReader() };
 }
+
+};

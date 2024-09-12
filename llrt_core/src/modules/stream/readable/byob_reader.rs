@@ -1,9 +1,9 @@
 use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
-    class::{OwnedBorrowMut, Trace},
+    class::{OwnedBorrowMut, Trace, Tracer},
     methods,
     prelude::This,
-    Class, Ctx, Error, Exception, FromJs, Function, Promise, Result, Value,
+    Class, Ctx, Error, Exception, FromJs, Promise, Result, Value,
 };
 use std::collections::VecDeque;
 
@@ -34,7 +34,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         // For each readIntoRequest of readIntoRequests,
         for read_into_request in read_into_requests {
             // Perform readIntoRequest’s error steps, given e.
-            read_into_request.error_steps.call((e.clone(),))?;
+            read_into_request.error_steps(e.clone())?;
         }
 
         Ok(())
@@ -43,7 +43,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
     fn set_up_readable_stream_byob_reader(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-    ) -> Result<OwnedBorrowMut<'js, Self>> {
+    ) -> Result<Class<'js, Self>> {
         // If ! IsReadableStreamLocked(stream) is true, throw a TypeError exception.
         if stream.is_readable_stream_locked() {
             return Err(Exception::throw_type(
@@ -84,7 +84,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             reader.clone(),
         ));
 
-        Ok(OwnedBorrowMut::from_class(reader))
+        Ok(reader)
     }
 
     fn readable_stream_byob_reader_release(&mut self, ctx: &Ctx<'js>) -> Result<()> {
@@ -119,9 +119,13 @@ impl<'js> ReadableStreamBYOBReader<'js> {
 
         // If stream.[[state]] is "errored", perform readIntoRequest’s error steps given stream.[[storedError]].
         if let ReadableStreamState::Errored = stream.state {
-            read_into_request
-                .error_steps
-                .call((stream.stored_error.clone(),))
+            read_into_request.error_steps(
+                stream
+                    .stored_error
+                    .clone()
+                    .expect("stream in error state without stored error")
+                    .clone(),
+            )
         } else {
             // Otherwise, perform ! ReadableByteStreamControllerPullInto(stream.[[controller]], view, min, readIntoRequest).
             match &stream.controller {
@@ -153,7 +157,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
     pub fn new(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-    ) -> Result<OwnedBorrowMut<'js, Self>> {
+    ) -> Result<Class<'js, Self>> {
         // Perform ? SetUpReadableStreamBYOBReader(this, stream).
         Self::set_up_readable_stream_byob_reader(ctx, stream)
     }
@@ -237,32 +241,40 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         let read_into_request = ReadableStreamReadIntoRequest {
             // chunk steps, given chunk
             // Resolve promise with «[ "value" → chunk, "done" → false ]».
-            chunk_steps: Function::new(ctx.clone(), {
+            chunk_steps: {
                 let resolve = resolve.clone();
-                move |chunk: Value<'js>| -> Result<()> {
+                Box::new(move |chunk: Value<'js>| -> Result<()> {
                     resolve.call((ReadableStreamReadResult {
-                        value: chunk,
+                        value: Some(chunk),
                         done: false,
                     },))
-                }
-            })?,
+                })
+            },
             // close steps, given chunk
             // Resolve promise with «[ "value" → chunk, "done" → true ]».
-            close_steps: Function::new(ctx.clone(), {
+            close_steps: {
                 let resolve = resolve.clone();
-                move |chunk: Value<'js>| -> Result<()> {
+                Box::new(move |chunk: Value<'js>| -> Result<()> {
                     resolve.call((ReadableStreamReadResult {
-                        value: chunk,
+                        value: Some(chunk),
                         done: true,
                     },))
-                }
-            })?,
+                })
+            },
             // error steps, given e
             // Reject promise with e.
-            error_steps: Function::new(ctx.clone(), {
+            error_steps: {
                 let reject = reject.clone();
-                move |e: Value<'js>| -> Result<()> { reject.call((e,)) }
-            })?,
+                Box::new(move |e: Value<'js>| -> Result<()> { reject.call((e,)) })
+            },
+            trace: {
+                let resolve = resolve.clone();
+                let reject = reject.clone();
+                Box::new(move |tracer| {
+                    resolve.trace(tracer);
+                    reject.trace(tracer);
+                })
+            },
         };
 
         // Perform ! ReadableStreamBYOBReaderRead(this, view, options["min"], readIntoRequest).
@@ -306,9 +318,32 @@ impl<'js> FromJs<'js> for ReadableStreamBYOBReaderReadOptions {
     }
 }
 
-#[derive(Trace)]
 pub(super) struct ReadableStreamReadIntoRequest<'js> {
-    pub(super) chunk_steps: Function<'js>,
-    pub(super) close_steps: Function<'js>,
-    pub(super) error_steps: Function<'js>,
+    chunk_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
+    close_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
+    error_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
+    trace: Box<dyn Fn(Tracer<'_, 'js>) + 'js>,
+}
+
+impl<'js> ReadableStreamReadIntoRequest<'js> {
+    pub(super) fn chunk_steps(self, chunk: Value<'js>) -> Result<()> {
+        let chunk_steps = self.chunk_steps;
+        chunk_steps(chunk)
+    }
+
+    pub(super) fn close_steps(self, chunk: Value<'js>) -> Result<()> {
+        let close_steps = self.close_steps;
+        close_steps(chunk)
+    }
+
+    pub(super) fn error_steps(self, reason: Value<'js>) -> Result<()> {
+        let error_steps = self.error_steps;
+        error_steps(reason)
+    }
+}
+
+impl<'js> Trace<'js> for ReadableStreamReadIntoRequest<'js> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        (self.trace)(tracer)
+    }
 }

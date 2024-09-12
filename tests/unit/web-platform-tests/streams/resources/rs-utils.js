@@ -1,6 +1,5 @@
-'use strict';
-export default function ({step_timeout}) {
-
+"use strict";
+export default function ({ step_timeout }) {
   class RandomPushSource {
     constructor(toPush) {
       this.pushed = 0;
@@ -58,13 +57,13 @@ export default function ({step_timeout}) {
         clearInterval(this._intervalHandle);
         this._intervalHandle = undefined;
       } else {
-        throw new Error('Can\'t pause reading an unstarted source.');
+        throw new Error("Can't pause reading an unstarted source.");
       }
     }
   }
 
   function randomChunk(size) {
-    let chunk = '';
+    let chunk = "";
 
     for (let i = 0; i < size; ++i) {
       // Add a random character from the basic printable ASCII set.
@@ -104,9 +103,9 @@ export default function ({step_timeout}) {
       this.opened = false;
       this.closed = false;
 
-      this._exec = f => f();
+      this._exec = (f) => f();
       if (async) {
-        this._exec = f => step_timeout(f, 0);
+        this._exec = (f) => step_timeout(f, 0);
       }
     }
 
@@ -141,7 +140,7 @@ export default function ({step_timeout}) {
     const stream = new ReadableStream({
       start() {
         return new Promise((resolve, reject) => {
-          sequentialSource.open(err => {
+          sequentialSource.open((err) => {
             if (err) {
               reject(err);
             }
@@ -156,7 +155,7 @@ export default function ({step_timeout}) {
             if (err) {
               reject(err);
             } else if (done) {
-              sequentialSource.close(err2 => {
+              sequentialSource.close((err2) => {
                 if (err2) {
                   reject(err2);
                 }
@@ -169,7 +168,7 @@ export default function ({step_timeout}) {
             }
           });
         });
-      }
+      },
     });
 
     stream.source = sequentialSource;
@@ -179,13 +178,13 @@ export default function ({step_timeout}) {
 
   function transferArrayBufferView(view) {
     const noopByteStream = new ReadableStream({
-      type: 'bytes',
+      type: "bytes",
       pull(c) {
         c.byobRequest.respond(c.byobRequest.view.byteLength);
         c.close();
-      }
+      },
     });
-    const reader = noopByteStream.getReader({ mode: 'byob' });
+    const reader = noopByteStream.getReader({ mode: "byob" });
     return reader.read(view).then((result) => result.value);
   }
 
@@ -193,5 +192,4 @@ export default function ({step_timeout}) {
   self.readableStreamToArray = readableStreamToArray;
   self.sequentialReadableStream = sequentialReadableStream;
   self.transferArrayBufferView = transferArrayBufferView;
-
-};
+}

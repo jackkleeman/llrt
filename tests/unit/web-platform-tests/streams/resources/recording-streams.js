@@ -1,5 +1,7 @@
 'use strict';
 
+export default function ({ }) {
+
 self.recordingReadableStream = (extras = {}, strategy) => {
   let controllerToCopyOver;
   const stream = new ReadableStream({
@@ -128,4 +130,6 @@ self.recordingTransformStream = (extras = {}, writableStrategy, readableStrategy
   stream.events = [];
 
   return stream;
+};
+
 };

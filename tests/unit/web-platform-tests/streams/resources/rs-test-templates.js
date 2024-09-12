@@ -1,11 +1,17 @@
 'use strict';
 
 export default function({
+  test,
+  promise_test,
   assert_equals,
   assert_not_equals,
   assert_array_equals,
   assert_true,
+  assert_false,
   promise_rejects_exactly,
+  assert_throws_js,
+  promise_rejects_js,
+  assert_object_equals,
 }) {
 
 // These tests can be run against any readable stream produced by the web platform that meets the given descriptions.
