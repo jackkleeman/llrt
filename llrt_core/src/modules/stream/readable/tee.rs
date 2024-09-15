@@ -20,33 +20,37 @@ use crate::{
     utils::clone::structured_clone,
 };
 
-use super::{ReadableStream, ReadableStreamController};
+use super::{ReadableStream, ReadableStreamController, ReadableStreamControllerOwnedBorrowMut};
 
 impl<'js> ReadableStream<'js> {
     pub(super) fn readable_stream_tee(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, Self>,
+        controller: ReadableStreamControllerOwnedBorrowMut<'js>,
         clone_for_branch_2: bool,
     ) -> Result<(Class<'js, Self>, Class<'js, Self>)> {
-        match stream.controller {
+        match controller {
             // If stream.[[controller]] implements ReadableByteStreamController, return ? ReadableByteStreamTee(stream).
-            Some(ReadableStreamController::ReadableStreamByteController(_)) => {
+            ReadableStreamControllerOwnedBorrowMut::ReadableStreamByteController(_controller) => {
                 Self::readable_byte_stream_tee(ctx, stream)
             },
-            // Return ? ReadableStreamDefaultTee(stream, cloneForBranch2).
-            _ => Self::readable_stream_default_tee(ctx, stream, clone_for_branch_2),
+            // Otherwise,
+            ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(controller) => {
+                // Return ? ReadableStreamDefaultTee(stream, cloneForBranch2).
+                Self::readable_stream_default_tee(ctx, stream, controller, clone_for_branch_2)
+            },
         }
     }
 
     fn readable_stream_default_tee(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, Self>,
+        controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>,
         clone_for_branch_2: bool,
     ) -> Result<(Class<'js, Self>, Class<'js, Self>)> {
         // Let reader be ? AcquireReadableStreamDefaultReader(stream).
-        let reader =
+        let (stream, reader) =
             ReadableStreamReader::acquire_readable_stream_default_reader(ctx.clone(), stream)?;
-        let stream = reader.borrow_mut().generic.stream.clone().unwrap();
         // Let reading be false.
         let reading = Rc::new(AtomicBool::new(false));
         // Let readAgain be false.
@@ -67,6 +71,9 @@ impl<'js> ReadableStream<'js> {
         // Let startAlgorithm be an algorithm that returns undefined.
         let start_algorithm = StartAlgorithm::ReturnUndefined;
 
+        let stream = stream.into_inner();
+        let controller = controller.into_inner();
+
         let pull_algorithm = PullAlgorithm::Function {
             f: Function::new(ctx.clone(), {
                 let stream = stream.clone();
@@ -76,12 +83,13 @@ impl<'js> ReadableStream<'js> {
                 let branch_1 = branch_1.clone();
                 let branch_2 = branch_2.clone();
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
-                move |controller: Value<'js>| {
+                move |ctx: Ctx<'js>, controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>| {
                     let stream = OwnedBorrowMut::from_class(stream.clone());
                     let reader = OwnedBorrowMut::from_class(reader.clone());
                     Self::readable_stream_default_pull_algorithm(
-                        controller.ctx().clone(),
+                        ctx,
                         stream,
+                        controller,
                         clone_for_branch_2,
                         reader,
                         reading.clone(),
@@ -101,6 +109,7 @@ impl<'js> ReadableStream<'js> {
             f: Function::new(ctx.clone(), {
                 OnceFn::new({
                     let stream = stream.clone();
+                    let controller = controller.clone();
                     let reader = reader.clone();
                     let reason_1 = reason_1.clone();
                     let reason_2 = reason_2.clone();
@@ -108,10 +117,12 @@ impl<'js> ReadableStream<'js> {
                     let resolve_cancel_promise = resolve_cancel_promise.clone();
                     move |reason: Value<'js>| {
                         let stream = OwnedBorrowMut::from_class(stream);
+                        let controller = OwnedBorrowMut::from_class(controller);
                         let reader = OwnedBorrowMut::from_class(reader);
                         Self::readable_stream_default_cancel_1_algorithm(
                             reason.ctx().clone(),
                             stream,
+                            controller,
                             reader,
                             reason_1,
                             reason_2,
@@ -129,16 +140,19 @@ impl<'js> ReadableStream<'js> {
             f: Function::new(ctx.clone(), {
                 OnceFn::new({
                     let stream = stream.clone();
+                    let controller = controller.clone();
                     let reader = reader.clone();
                     let reason_1 = reason_1.clone();
                     let reason_2 = reason_2.clone();
                     let resolve_cancel_promise = resolve_cancel_promise.clone();
                     move |reason: Value<'js>| {
                         let stream = OwnedBorrowMut::from_class(stream);
+                        let controller = OwnedBorrowMut::from_class(controller);
                         let reader = OwnedBorrowMut::from_class(reader);
                         Self::readable_stream_default_cancel_2_algorithm(
                             reason.ctx().clone(),
                             stream,
+                            controller,
                             reader,
                             reason_1,
                             reason_2,
@@ -188,19 +202,20 @@ impl<'js> ReadableStream<'js> {
             {
                 let branch_1 = branch_1.clone();
                 let branch_2 = branch_2.clone();
-                move |result| match result {
+                move |ctx, result| match result {
                     Ok(()) => Ok(()),
                     // Upon rejection of reader.[[closedPromise]] with reason r,
                     Err(reason) => {
                         // Perform ! ReadableStreamDefaultControllerError(branch1.[[controller]], r).
-                        match controller_1 {
-                            ReadableStreamController::ReadableStreamDefaultController(c) => {
+                        match ReadableStreamControllerOwnedBorrowMut::from_class(controller_1) {
+                            ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(c) => {
                                 let mut stream_1 = OwnedBorrowMut::from_class(branch_1);
-                                let mut reader_1 = stream_1.reader_mut();
-                                c.borrow_mut().readable_stream_default_controller_error(
+                                let reader_1 = stream_1.reader_mut();
+                                ReadableStreamDefaultController::readable_stream_default_controller_error(
                                     &ctx,
-                                    &mut stream_1,
-                                    reader_1.as_mut(),
+                                    stream_1,
+                                    c,
+                                    reader_1,
                                     reason.clone(),
                                 )?;
                             },
@@ -210,15 +225,12 @@ impl<'js> ReadableStream<'js> {
                         }
 
                         // Perform ! ReadableStreamDefaultControllerError(branch2.[[controller]], r).
-                        match controller_2 {
-                            ReadableStreamController::ReadableStreamDefaultController(c) => {
+                        match ReadableStreamControllerOwnedBorrowMut::from_class(controller_2) {
+                            ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(c) => {
                                 let mut stream_2 = OwnedBorrowMut::from_class(branch_2);
-                                let mut reader_2 = stream_2.reader_mut();
-                                c.borrow_mut().readable_stream_default_controller_error(
-                                    &ctx,
-                                    &mut stream_2,
-                                    reader_2.as_mut(),
-                                    reason,
+                                let reader_2 = stream_2.reader_mut();
+                                ReadableStreamDefaultController::readable_stream_default_controller_error(
+                                    &ctx, stream_2, c, reader_2, reason,
                                 )?;
                             },
                             _ => {
@@ -243,6 +255,7 @@ impl<'js> ReadableStream<'js> {
     fn readable_stream_default_pull_algorithm(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>,
         clone_for_branch_2: bool,
         reader: OwnedBorrowMut<'js, ReadableStreamDefaultReader<'js>>,
         reading: Rc<AtomicBool>,
@@ -277,7 +290,7 @@ impl<'js> ReadableStream<'js> {
                 let branch_2 = branch_2.clone();
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
-                Box::new(move |stream, reader, chunk| {
+                Box::new(move |stream, controller, reader, chunk| {
                     let ctx = chunk.ctx().clone();
                     let reader = match reader {
                         Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(
@@ -290,12 +303,22 @@ impl<'js> ReadableStream<'js> {
                             panic!("ReadableStream default tee chunk steps called without reader")
                         },
                     };
+                    let controller = match controller {
+                        ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(
+                            c,
+                        ) => c,
+                        ReadableStreamControllerOwnedBorrowMut::ReadableStreamByteController(_) => {
+                            panic!("ReadableStream default tee chunk steps called with byte controller")
+                        },
+                    };
                     let stream_class = stream.into_inner();
+                    let controller_class = controller.into_inner();
                     let reader_class = reader.into_inner();
                     // Queue a microtask to perform the following steps:
                     let f = {
                         let ctx = ctx.clone();
                         let stream_class = stream_class.clone();
+                        let controller_class = controller_class.clone();
                         let reader_class = reader_class.clone();
                         move || -> Result<()> {
                             // Set readAgain to false.
@@ -319,22 +342,23 @@ impl<'js> ReadableStream<'js> {
                                             ),
                                         );
 
-                                        let mut controller_1 = match stream_1.controller.clone().expect(
-                                        "canceled1 set without branch1 having a controller",
-                                    ) {
-                                        ReadableStreamController::ReadableStreamDefaultController(c) => {
-                                            OwnedBorrowMut::from_class(c.clone())
-                                        },
-                                        _ => panic!("controller for streams in ReadableStreamDefaultTee must be ReadableStreamDefaultController"),
-                                    };
+                                        let controller_1 = match stream_1.controller.clone().expect(
+                                            "canceled1 set without branch1 having a controller",
+                                        ) {
+                                            ReadableStreamController::ReadableStreamDefaultController(c) => {
+                                                OwnedBorrowMut::from_class(c.clone())
+                                            },
+                                            _ => panic!("controller for streams in ReadableStreamDefaultTee must be ReadableStreamDefaultController"),
+                                        };
 
-                                        let mut reader_1 = stream_1.reader_mut();
+                                        let reader_1 = stream_1.reader_mut();
 
                                         // Perform ! ReadableStreamDefaultControllerError(branch1.[[controller]], cloneResult.[[Value]]).
-                                        controller_1.readable_stream_default_controller_error(
+                                        ReadableStreamDefaultController::readable_stream_default_controller_error(
                                             &ctx,
-                                            &mut stream_1,
-                                            reader_1.as_mut(),
+                                            stream_1,
+                                            controller_1,
+                                            reader_1,
                                             clone_result.clone(),
                                         )?;
 
@@ -344,7 +368,7 @@ impl<'js> ReadableStream<'js> {
                                             ),
                                         );
 
-                                        let mut controller_2 = match stream_2.controller.clone().expect(
+                                        let controller_2 = match stream_2.controller.clone().expect(
                                         "canceled2 set without branch2 having a controller",
                                     ) {
                                         ReadableStreamController::ReadableStreamDefaultController(c) => {
@@ -353,22 +377,26 @@ impl<'js> ReadableStream<'js> {
                                         _ => panic!("controller for streams in ReadableStreamDefaultTee must be ReadableStreamDefaultController"),
                                     };
 
-                                        let mut reader_2 = stream_2.reader_mut();
+                                        let reader_2 = stream_2.reader_mut();
 
                                         // Perform ! ReadableStreamDefaultControllerError(branch2.[[controller]], cloneResult.[[Value]]).
-                                        controller_2.readable_stream_default_controller_error(
+                                        ReadableStreamDefaultController::readable_stream_default_controller_error(
                                             &ctx,
-                                            &mut stream_2,
-                                            reader_2.as_mut(),
+                                            stream_2,
+                                            controller_2,
+                                            reader_2,
                                             clone_result.clone(),
                                         )?;
 
                                         // Resolve cancelPromise with ! ReadableStreamCancel(stream, cloneResult.[[Value]]).
-                                        let (promise, _, _) =
+                                        let (promise, _, _, _) =
                                             ReadableStream::readable_stream_cancel(
                                                 ctx,
                                                 OwnedBorrowMut::from_class(stream_class),
-                                                Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(OwnedBorrowMut::from_class(reader_class))),
+                                                OwnedBorrowMut::from_class(controller_class).into(),
+                                                Some(
+                                                    OwnedBorrowMut::from_class(reader_class).into(),
+                                                ),
                                                 clone_result,
                                             )?;
                                         resolve_cancel_promise.call((promise,))?;
@@ -439,6 +467,7 @@ impl<'js> ReadableStream<'js> {
                                 Self::readable_stream_default_pull_algorithm(
                                     ctx.clone(),
                                     OwnedBorrowMut::from_class(stream_class),
+                                    OwnedBorrowMut::from_class(controller_class),
                                     clone_for_branch_2,
                                     OwnedBorrowMut::from_class(reader_class),
                                     reading.clone(),
@@ -459,11 +488,8 @@ impl<'js> ReadableStream<'js> {
                     () = Function::new(ctx, OnceFn::new(f))?.defer(())?;
                     Ok((
                         OwnedBorrowMut::from_class(stream_class),
-                        Some(
-                            ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(
-                                OwnedBorrowMut::from_class(reader_class),
-                            ),
-                        ),
+                        OwnedBorrowMut::from_class(controller_class).into(),
+                        Some(OwnedBorrowMut::from_class(reader_class).into()),
                     ))
                 })
             },
@@ -474,43 +500,51 @@ impl<'js> ReadableStream<'js> {
                 let branch_1 = branch_1.clone();
                 let branch_2 = branch_2.clone();
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
-                Box::new(move |ctx| {
+                Box::new(move |ctx, stream, controller, reader| {
                     // Set reading to false.
                     reading.store(false, Ordering::Relaxed);
                     // If canceled1 is false, perform ! ReadableStreamDefaultControllerClose(branch1.[[controller]]).
                     if !reason_1.get().is_some() {
-                        let mut stream = branch_1
-                            .get()
-                            .expect("close called without branch1 being initialised")
-                            .borrow_mut();
+                        let stream = OwnedBorrowMut::from_class(
+                            branch_1
+                                .get()
+                                .expect("close called without branch1 being initialised")
+                                .clone(),
+                        );
 
-                        let controller = stream
-                            .controller
-                            .clone()
-                            .expect("close called without branch1 having a controller");
+                        let controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+                            stream
+                                .controller
+                                .clone()
+                                .expect("close called without branch1 having a controller"),
+                        );
 
                         match controller {
-                            ReadableStreamController::ReadableStreamDefaultController(c) => {
-                                c.borrow_mut().readable_stream_default_controller_close(ctx.clone(), &mut stream)?
+                            ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(c) => {
+                                ReadableStreamDefaultController::readable_stream_default_controller_close(ctx.clone(), stream, c)?
                             },
                             _ => panic!("controller for streams in ReadableStreamDefaultTee must be ReadableStreamDefaultController"),
                         }
                     }
                     // If canceled2 is false, perform ! ReadableStreamDefaultControllerClose(branch2.[[controller]]).
                     if !reason_2.get().is_some() {
-                        let mut stream = branch_2
-                            .get()
-                            .expect("close called without branch2 being initialised")
-                            .borrow_mut();
+                        let stream = OwnedBorrowMut::from_class(
+                            branch_2
+                                .get()
+                                .expect("close called without branch2 being initialised")
+                                .clone(),
+                        );
 
-                        let controller = stream
-                            .controller
-                            .clone()
-                            .expect("close called without branch2 having a controller");
+                        let controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+                            stream
+                                .controller
+                                .clone()
+                                .expect("close called without branch2 having a controller"),
+                        );
 
                         match controller {
-                            ReadableStreamController::ReadableStreamDefaultController(c) => {
-                                c.borrow_mut().readable_stream_default_controller_close(ctx.clone(), &mut stream)?
+                            ReadableStreamControllerOwnedBorrowMut::ReadableStreamDefaultController(c) => {
+                                ReadableStreamDefaultController::readable_stream_default_controller_close(ctx.clone(), stream, c)?
                             },
                             _ => panic!("controller for streams in ReadableStreamDefaultTee must be ReadableStreamDefaultController"),
                         }
@@ -519,15 +553,15 @@ impl<'js> ReadableStream<'js> {
                     if !reason_1.get().is_some() || !reason_2.get().is_some() {
                         resolve_cancel_promise.call((Value::new_undefined(ctx.clone()),))?
                     }
-                    Ok(())
+                    Ok((stream, controller, reader))
                 })
             },
             error_steps: {
                 let reading = reading.clone();
-                Box::new(move |_reason| {
+                Box::new(move |stream, controller, reader, _reason| {
                     // Set reading to false.
                     reading.store(false, Ordering::Relaxed);
-                    Ok(())
+                    Ok((stream, controller, reader))
                 })
             },
             trace: {
@@ -551,8 +585,9 @@ impl<'js> ReadableStream<'js> {
         // Perform ! ReadableStreamDefaultReaderRead(reader, readRequest).
         ReadableStreamDefaultReader::readable_stream_default_reader_read(
             &ctx,
-            reader,
             stream,
+            controller.into(),
+            reader,
             read_request,
         )?;
 
@@ -564,6 +599,7 @@ impl<'js> ReadableStream<'js> {
     fn readable_stream_default_cancel_1_algorithm(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>,
         reader: OwnedBorrowMut<'js, ReadableStreamDefaultReader<'js>>,
         reason_1: Rc<OnceCell<Value<'js>>>,
         reason_2: Rc<OnceCell<Value<'js>>>,
@@ -582,10 +618,11 @@ impl<'js> ReadableStream<'js> {
             // Let compositeReason be ! CreateArrayFromList(« reason1, reason2 »).
             let composite_reason = List((reason, reason_2));
             // Let cancelResult be ! ReadableStreamCancel(stream, compositeReason).
-            let (cancel_result, _, _) = ReadableStream::readable_stream_cancel(
+            let (cancel_result, _, _, _) = ReadableStream::readable_stream_cancel(
                 ctx.clone(),
                 stream,
-                Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(reader)),
+                controller.into(),
+                Some(reader.into()),
                 composite_reason.into_js(&ctx)?,
             )?;
             // Resolve cancelPromise with cancelResult.
@@ -600,6 +637,7 @@ impl<'js> ReadableStream<'js> {
     fn readable_stream_default_cancel_2_algorithm(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>,
         reader: OwnedBorrowMut<'js, ReadableStreamDefaultReader<'js>>,
         reason_1: Rc<OnceCell<Value<'js>>>,
         reason_2: Rc<OnceCell<Value<'js>>>,
@@ -618,10 +656,11 @@ impl<'js> ReadableStream<'js> {
             // Let compositeReason be ! CreateArrayFromList(« reason1, reason2 »).
             let composite_reason = List((reason_1, reason));
             // Let cancelResult be ! ReadableStreamCancel(stream, compositeReason).
-            let (cancel_result, _, _) = ReadableStream::readable_stream_cancel(
+            let (cancel_result, _, _, _) = ReadableStream::readable_stream_cancel(
                 ctx.clone(),
                 stream,
-                Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(reader)),
+                controller.into(),
+                Some(reader.into()),
                 composite_reason.into_js(&ctx)?,
             )?;
             // Resolve cancelPromise with cancelResult.

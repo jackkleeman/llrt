@@ -3,7 +3,9 @@
 'use strict';
 
 export default function(ctx) {
-const { promise_test, assert_equals } = ctx;
+const { promise_test, assert_equals, assert_object_equals, promise_rejects_exactly, assert_array_equals, assert_false, promise_rejects_js } = ctx;
+
+require("../resources/test-utils.js").default(ctx);
 
 const iterableFactories = [
   ['an array of values', () => {

@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use super::{
     byte_controller::ReadableStreamByteController, downgrade_owned_borrow_mut,
     promise_rejected_with, ObjectExt, ReadableStream, ReadableStreamController,
-    ReadableStreamGenericReader, ReadableStreamReadResult, ReadableStreamReader,
-    ReadableStreamReaderOwnedBorrowMut, ReadableStreamState,
+    ReadableStreamControllerOwnedBorrowMut, ReadableStreamGenericReader, ReadableStreamReadResult,
+    ReadableStreamReader, ReadableStreamState,
 };
 
 #[derive(Trace)]
@@ -87,9 +87,15 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         Ok(reader)
     }
 
-    fn readable_stream_byob_reader_release(&mut self, ctx: &Ctx<'js>) -> Result<()> {
+    fn readable_stream_byob_reader_release(
+        &mut self,
+        ctx: &Ctx<'js>,
+        stream: &mut ReadableStream<'js>,
+        controller: &mut ReadableStreamControllerOwnedBorrowMut<'js>,
+    ) -> Result<()> {
         // Perform ! ReadableStreamReaderGenericRelease(reader).
-        self.generic.readable_stream_reader_generic_release(ctx)?;
+        self.generic
+            .readable_stream_reader_generic_release(ctx, stream, controller)?;
 
         // Let e be a new TypeError exception.
         let e: Value = ctx.eval(r#"new TypeError("Reader was released")"#)?;
@@ -135,7 +141,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
                         ctx,
                         c,
                         stream,
-                        Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(reader)),
+                        Some(reader.into()),
                         view,
                         min,
                         read_into_request,
@@ -292,12 +298,22 @@ impl<'js> ReadableStreamBYOBReader<'js> {
 
     fn release_lock(&mut self, ctx: Ctx<'js>) -> Result<()> {
         // If this.[[stream]] is undefined, return.
-        if self.generic.stream.is_none() {
-            return Ok(());
-        }
+        let mut stream = match self.generic.stream.clone() {
+            None => {
+                return Ok(());
+            },
+            Some(stream) => OwnedBorrowMut::from_class(stream),
+        };
+
+        let mut controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+            stream
+                .controller
+                .clone()
+                .expect("releaseLock called on byob reader without controller"),
+        );
 
         // Perform ! ReadableStreamBYOBReaderRelease(this).
-        self.readable_stream_byob_reader_release(&ctx)
+        self.readable_stream_byob_reader_release(&ctx, &mut stream, &mut controller)
     }
 }
 

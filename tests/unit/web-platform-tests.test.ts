@@ -407,6 +407,14 @@ describe("web-platform-tests", () => {
 
   describe("streams", () => {
     describe("readable-streams", () => {
+      it("should pass async-iterator.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/async-iterator.any.js")
+            .default,
+          done
+        );
+      });
+
       it("should pass bad-strategies.any.js tests", (done) => {
         runTest(
           require("./web-platform-tests/streams/readable-streams/bad-strategies.any.js")
@@ -463,13 +471,13 @@ describe("web-platform-tests", () => {
         );
       });
 
-      // it("should pass from.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-streams/from.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass from.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-streams/from.any.js")
+            .default,
+          done
+        );
+      });
 
       it("should pass garbage-collection.any.js tests", (done) => {
         runTest(
