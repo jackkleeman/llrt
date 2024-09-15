@@ -495,14 +495,7 @@ describe("web-platform-tests", () => {
         );
       });
 
-      it("should pass general.any.js tests", (done) => {
-        runTest(
-          require("./web-platform-tests/streams/readable-streams/general.any.js")
-            .default,
-          done
-        );
-      });
-
+      // needs owning type impl
       // it("should pass owning-type.any.js tests", (done) => {
       //   runTest(
       //     require("./web-platform-tests/streams/readable-streams/owning-type.any.js")

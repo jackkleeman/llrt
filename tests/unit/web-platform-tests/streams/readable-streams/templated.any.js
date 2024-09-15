@@ -5,6 +5,7 @@
 
 export default function(ctx) {
   
+require("../resources/test-utils.js").default(ctx);
 require("../resources/rs-test-templates.js").default(ctx);
   
 

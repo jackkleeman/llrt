@@ -77,15 +77,22 @@ impl<'js> ReadableStream<'js> {
         let pull_algorithm = PullAlgorithm::Function {
             f: Function::new(ctx.clone(), {
                 let stream = stream.clone();
+                let controller = controller.clone();
                 let reader = reader.clone();
                 let reason_1 = reason_1.clone();
                 let reason_2 = reason_2.clone();
                 let branch_1 = branch_1.clone();
                 let branch_2 = branch_2.clone();
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
-                move |ctx: Ctx<'js>, controller: OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>| {
+                move |ctx: Ctx<'js>,
+                      branch_controller: OwnedBorrowMut<
+                    'js,
+                    ReadableStreamDefaultController<'js>,
+                >| {
                     let stream = OwnedBorrowMut::from_class(stream.clone());
                     let reader = OwnedBorrowMut::from_class(reader.clone());
+                    let controller = OwnedBorrowMut::from_class(controller.clone());
+                    drop(branch_controller);
                     Self::readable_stream_default_pull_algorithm(
                         ctx,
                         stream,

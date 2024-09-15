@@ -7,8 +7,9 @@
 export default function(ctx) {
 const { promise_test, assert_equals, assert_throws_js, assert_true, assert_not_equals, promise_rejects_exactly, assert_array_equals, assert_false } = ctx;
 
-require("../resources/test-utils.js").default(ctx);
 require("../resources/recording-streams.js").default(ctx);
+require("../resources/rs-utils.js").default(ctx);
+require("../resources/test-utils.js").default(ctx);
 
 // The size() function of the readable strategy can re-entrantly call back into the ReadableStream implementation. This
 // makes it risky to cache state across the call to ReadableStreamDefaultControllerEnqueue. These tests attempt to catch

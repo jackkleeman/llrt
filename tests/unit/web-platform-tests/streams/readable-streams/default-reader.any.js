@@ -5,6 +5,8 @@
 export default function(ctx) {
 const { promise_test, test, assert_equals, assert_object_equals, assert_throws_js, assert_true, promise_rejects_js, assert_not_equals, promise_rejects_exactly } = ctx;
 
+require("../resources/rs-utils.js").default(ctx);
+
 test(() => {
 
   assert_throws_js(TypeError, () => new ReadableStreamDefaultReader('potato'));

@@ -583,9 +583,7 @@ impl<'js> ReadableStream<'js> {
                 // Return the result of reacting to sourceCancelPromise with a fulfillment step that returns undefined.
                 let promise = source_cancel_promise.then()?.call((
                     This(source_cancel_promise.clone()),
-                    Function::new(ctx.clone(), move || {
-                        Value::new_undefined(ctx.clone())
-                    })?,
+                    Function::new(ctx.clone(), move || Value::new_undefined(ctx.clone()))?,
                 ))?;
 
                 Ok((

@@ -3,7 +3,7 @@
 'use strict';
 
 export default function(ctx) {
-const { promise_test, assert_equals, assert_object_equals, promise_rejects_exactly, assert_array_equals, assert_false, promise_rejects_js } = ctx;
+const { test, promise_test, assert_equals, assert_object_equals, promise_rejects_exactly, assert_array_equals, assert_false, promise_rejects_js, assert_throws_js, assert_throws_exactly } = ctx;
 
 require("../resources/test-utils.js").default(ctx);
 
