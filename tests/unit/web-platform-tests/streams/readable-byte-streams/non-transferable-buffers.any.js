@@ -1,6 +1,11 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function(
+  ctx
+) {
+const { promise_test, test, assert_throws_js } = ctx;
+
 promise_test(async t => {
   const rs = new ReadableStream({
     pull: t.unreached_func('pull() should not be called'),
@@ -68,3 +73,5 @@ promise_test(async t => {
 
   assert_throws_js(TypeError, () => byobRequest.respondWithNewView(newView));
 }, 'ReadableStream with byte source: respondWithNewView() with a non-transferable buffer');
+
+};

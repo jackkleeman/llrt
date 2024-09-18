@@ -2,13 +2,13 @@ use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
     class::{OwnedBorrowMut, Trace, Tracer},
     methods,
-    prelude::This,
+    prelude::{Opt, This},
     Class, Ctx, Error, Exception, FromJs, Promise, Result, Value,
 };
 use std::collections::VecDeque;
 
 use super::{
-    byte_controller::ReadableStreamByteController, downgrade_owned_borrow_mut,
+    byte_controller::ReadableByteStreamController, downgrade_owned_borrow_mut,
     promise_rejected_with, ObjectExt, ReadableStream, ReadableStreamController,
     ReadableStreamControllerOwnedBorrowMut, ReadableStreamGenericReader, ReadableStreamReadResult,
     ReadableStreamReader, ReadableStreamState,
@@ -137,7 +137,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             match &stream.controller {
                 Some(ReadableStreamController::ReadableStreamByteController(c)) => {
                     let c = OwnedBorrowMut::from_class(c.clone());
-                    ReadableStreamByteController::readable_byte_stream_controller_pull_into(
+                    ReadableByteStreamController::readable_byte_stream_controller_pull_into(
                         ctx,
                         c,
                         stream,
@@ -172,7 +172,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         ctx: Ctx<'js>,
         reader: This<OwnedBorrowMut<'js, Self>>,
         view: ObjectBytes<'js>,
-        options: Option<ReadableStreamBYOBReaderReadOptions>,
+        options: Opt<ReadableStreamBYOBReaderReadOptions>,
     ) -> Result<Promise<'js>> {
         let (buffer, byte_length, _) = view.get_array_buffer()?.unwrap();
         // If view.[[ByteLength]] is 0, return a promise rejected with a TypeError exception.
@@ -194,7 +194,9 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             return promise_rejected_with(&ctx, e);
         }
 
-        let options = options.unwrap_or(ReadableStreamBYOBReaderReadOptions { min: 1 });
+        let options = options
+            .0
+            .unwrap_or(ReadableStreamBYOBReaderReadOptions { min: 1 });
 
         // If options["min"] is 0, return a promise rejected with a TypeError exception.
         if options.min == 0 {

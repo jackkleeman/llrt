@@ -130,20 +130,16 @@ impl<'js> ReadableStreamDefaultController<'js> {
         // Set controller.[[cancelAlgorithm]] to cancelAlgorithm.
         controller.cancel_algorithm = Some(cancel_algorithm);
 
-        let controller_class = controller.into_inner();
+        let (controller_class, controller) = class_from_owned_borrow_mut(controller);
 
         // Set stream.[[controller]] to controller.
         stream.controller = Some(ReadableStreamController::ReadableStreamDefaultController(
             controller_class.clone(),
         ));
-        // ensure we don't hold the stream reference while start is executing
-        drop(stream);
 
         // Let startResult be the result of performing startAlgorithm. (This might throw an exception.)
-        let start_result = start_algorithm.call(
-            ctx.clone(),
-            ReadableStreamController::ReadableStreamDefaultController(controller_class.clone()),
-        )?;
+        let (start_result, controller_class, stream_class) =
+            Self::start_algorithm(ctx.clone(), controller, stream, start_algorithm)?;
 
         // Let startPromise be a promise resolved with startResult.
         let start_promise = promise_resolved_with(&ctx, Ok(start_result))?;
@@ -595,6 +591,29 @@ impl<'js> ReadableStreamDefaultController<'js> {
 
     pub(super) fn release_steps(&mut self) {}
 
+    fn start_algorithm(
+        ctx: Ctx<'js>,
+        controller: OwnedBorrowMut<'js, Self>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        start_algorithm: StartAlgorithm<'js>,
+    ) -> Result<(
+        Value<'js>,
+        Class<'js, Self>,
+        Class<'js, ReadableStream<'js>>,
+    )> {
+        let controller_class = controller.into_inner();
+        let stream_class = stream.into_inner();
+
+        Ok((
+            start_algorithm.call(
+                ctx,
+                ReadableStreamController::ReadableStreamDefaultController(controller_class.clone()),
+            )?,
+            controller_class,
+            stream_class,
+        ))
+    }
+
     fn pull_algorithm(
         ctx: Ctx<'js>,
         controller: OwnedBorrowMut<'js, Self>,
@@ -687,6 +706,11 @@ impl<'js> ReadableStreamDefaultController<'js> {
     // this is required by web platform tests for unclear reasons
     fn constructor() -> Self {
         unimplemented!()
+    }
+
+    #[qjs(constructor)]
+    fn new(ctx: Ctx<'js>) -> Result<Class<'js, Self>> {
+        Err(Exception::throw_type(&ctx, "Illegal constructor"))
     }
 
     // readonly attribute unrestricted double? desiredSize;

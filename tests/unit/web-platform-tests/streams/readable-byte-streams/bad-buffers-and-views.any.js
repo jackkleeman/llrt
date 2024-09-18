@@ -1,6 +1,11 @@
 // META: global=window,worker,shadowrealm
 'use strict';
 
+export default function(
+  ctx
+) {
+const { promise_test, test, async_test, assert_equals, assert_throws_js, assert_array_equals, assert_true, assert_false } = ctx;
+
 promise_test(() => {
   const stream = new ReadableStream({
     start(c) {
@@ -396,3 +401,5 @@ async_test(t => {
   reader.read(new Uint8Array([4, 5, 6]));
 }, 'ReadableStream with byte source: enqueue() throws if the BYOB request\'s buffer has been detached (in the ' +
   'closed state)');
+
+};

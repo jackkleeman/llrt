@@ -5,6 +5,16 @@
 // META: script=../resources/rs-test-templates.js
 'use strict';
 
+export default function(
+  ctx
+) {
+const { promise_test, test, assert_equals, assert_array_equals, assert_true } = ctx;
+
+require("../resources/rs-utils.js").default(ctx);
+require("../resources/test-utils.js").default(ctx);
+require("../resources/recording-streams.js").default(ctx);
+require("../resources/rs-test-templates.js").default(ctx);
+
 test(() => {
 
   const rs = new ReadableStream({ type: 'bytes' });
@@ -967,3 +977,5 @@ promise_test(async t => {
   assert_typed_array_equals(view1, new Uint8Array(underlying, 2), 'reader1 value');
   assert_typed_array_equals(view2, new Uint8Array([0x03]), 'reader2 value');
 }, 'ReadableStream teeing with byte source: reading an array with a byte offset should clone correctly');
+
+};

@@ -5,7 +5,6 @@ use std::{
 
 use crate::modules::events::abort_signal::AbortSignal;
 use byob_reader::ReadableStreamReadIntoRequest;
-use byte_controller::ReadableStreamByteController;
 use default_controller::ReadableStreamDefaultController;
 use iterator::{IteratorKind, IteratorRecord, ReadableStreamAsyncIterator};
 use llrt_utils::{
@@ -30,6 +29,7 @@ mod iterator;
 mod tee;
 
 pub(crate) use byob_reader::ReadableStreamBYOBReader;
+pub(crate) use byte_controller::{ReadableByteStreamController, ReadableStreamBYOBRequest};
 pub(crate) use count_queueing_strategy::CountQueuingStrategy;
 pub(crate) use default_reader::ReadableStreamDefaultReader;
 
@@ -101,10 +101,10 @@ impl<'js> ReadableStream<'js> {
                 }
                 // Let highWaterMark be ? ExtractHighWaterMark(strategy, 0).
                 let high_water_mark =
-                    QueuingStrategy::extract_high_water_mark(&ctx, queuing_strategy, 0.0)? as usize;
+                    QueuingStrategy::extract_high_water_mark(&ctx, queuing_strategy, 0.0)?;
 
                 // Perform ? SetUpReadableByteStreamControllerFromUnderlyingSource(this, underlyingSource, underlyingSourceDict, highWaterMark).
-                byte_controller::ReadableStreamByteController::set_up_readable_byte_stream_controller_from_underlying_source(
+                ReadableByteStreamController::set_up_readable_byte_stream_controller_from_underlying_source(
                     &ctx,
                     stream,
                     underlying_source,
@@ -597,12 +597,12 @@ impl<'js> ReadableStream<'js> {
     }
 
     fn readable_stream_add_read_into_request(
-        &mut self,
+        reader: Option<&mut ReadableStreamReaderOwnedBorrowMut<'js>>,
         read_request: ReadableStreamReadIntoRequest<'js>,
     ) {
         // Assert: stream.[[reader]] implements ReadableStreamBYOBReader.
-        match self.reader_mut() {
-            Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(mut r)) => {
+        match reader {
+            Some(ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(r)) => {
                 // Append readRequest to stream.[[reader]].[[readIntoRequests]].
                 r.read_into_requests.push_back(read_request)
             },
@@ -1270,7 +1270,7 @@ impl<'js> FromJs<'js> for StreamPipeOptions<'js> {
 #[derive(Trace, Clone)]
 enum ReadableStreamController<'js> {
     ReadableStreamDefaultController(Class<'js, ReadableStreamDefaultController<'js>>),
-    ReadableStreamByteController(Class<'js, ReadableStreamByteController<'js>>),
+    ReadableStreamByteController(Class<'js, ReadableByteStreamController<'js>>),
 }
 
 impl<'js> IntoJs<'js> for ReadableStreamController<'js> {
@@ -1284,7 +1284,7 @@ impl<'js> IntoJs<'js> for ReadableStreamController<'js> {
 
 enum ReadableStreamControllerOwnedBorrowMut<'js> {
     ReadableStreamDefaultController(OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>),
-    ReadableStreamByteController(OwnedBorrowMut<'js, ReadableStreamByteController<'js>>),
+    ReadableStreamByteController(OwnedBorrowMut<'js, ReadableByteStreamController<'js>>),
 }
 
 impl<'js> ReadableStreamControllerOwnedBorrowMut<'js> {
@@ -1317,7 +1317,7 @@ impl<'js> ReadableStreamControllerOwnedBorrowMut<'js> {
                 )
             },
             Self::ReadableStreamByteController(controller) => {
-                ReadableStreamByteController::pull_steps(
+                ReadableByteStreamController::pull_steps(
                     ctx,
                     controller,
                     reader,
@@ -1350,7 +1350,7 @@ impl<'js> ReadableStreamControllerOwnedBorrowMut<'js> {
             },
             Self::ReadableStreamByteController(controller) => {
                 let (result, stream, controller, reader) =
-                    ReadableStreamByteController::cancel_steps(
+                    ReadableByteStreamController::cancel_steps(
                         ctx, controller, stream, reader, reason,
                     )?;
                 Ok((result, stream, controller.into(), reader))
@@ -1376,7 +1376,7 @@ impl<'js> ReadableStreamControllerOwnedBorrowMut<'js> {
 
     fn into_byte_controller(
         self,
-    ) -> Option<OwnedBorrowMut<'js, ReadableStreamByteController<'js>>> {
+    ) -> Option<OwnedBorrowMut<'js, ReadableByteStreamController<'js>>> {
         match self {
             Self::ReadableStreamByteController(c) => Some(c),
             Self::ReadableStreamDefaultController(_) => None,
@@ -1392,10 +1392,10 @@ impl<'js> From<OwnedBorrowMut<'js, ReadableStreamDefaultController<'js>>>
     }
 }
 
-impl<'js> From<OwnedBorrowMut<'js, ReadableStreamByteController<'js>>>
+impl<'js> From<OwnedBorrowMut<'js, ReadableByteStreamController<'js>>>
     for ReadableStreamControllerOwnedBorrowMut<'js>
 {
-    fn from(value: OwnedBorrowMut<'js, ReadableStreamByteController<'js>>) -> Self {
+    fn from(value: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>) -> Self {
         Self::ReadableStreamByteController(value)
     }
 }

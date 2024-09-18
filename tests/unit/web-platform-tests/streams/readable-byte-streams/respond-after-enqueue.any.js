@@ -2,6 +2,11 @@
 
 'use strict';
 
+export default function(
+  ctx
+) {
+const { promise_test, assert_array_equals, assert_false } = ctx;
+
 // Repro for Blink bug https://crbug.com/1255762.
 promise_test(async () => {
   const rs = new ReadableStream({
@@ -53,3 +58,5 @@ promise_test(async () => {
   assert_false(read2.done, 'read2.done should not be true');
   assert_array_equals(read2.value, [0, 0], 'read2.value should be 2 bytes');
 }, 'byobRequest.respond() after enqueue() with double read should not crash');
+
+};

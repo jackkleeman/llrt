@@ -6,6 +6,8 @@ import {
   ReadableStream,
   CountQueuingStrategy,
   ReadableStreamDefaultReader,
+  ReadableByteStreamController,
+  ReadableStreamBYOBRequest,
 } from "stream/web";
 
 const runTest = (test, done) => {
@@ -54,16 +56,22 @@ const runTest = (test, done) => {
   const oldRs = globalThis.ReadableStream;
   const oldCqs = globalThis.CountQueuingStrategy;
   const oldRsdr = globalThis.ReadableStreamDefaultReader;
+  const oldRbsc = globalThis.ReadableByteStreamController;
+  const oldRsbr = globalThis.ReadableStreamBYOBRequest;
   const oldGc = globalThis.gc;
   globalThis.ReadableStream = ReadableStream;
   globalThis.CountQueuingStrategy = CountQueuingStrategy;
   globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
+  globalThis.ReadableByteStreamController = ReadableByteStreamController;
+  globalThis.ReadableStreamBYOBRequest = ReadableStreamBYOBRequest;
   globalThis.gc = globalThis.__gc;
 
   context.add_completion_callback((tests, status, assertions) => {
     globalThis.ReadableStream = oldRs;
     globalThis.CountQueuingStrategy = oldCqs;
     globalThis.ReadableStreamDefaultReader = oldRsdr;
+    globalThis.ReadableByteStreamController = oldRbsc;
+    globalThis.ReadableStreamBYOBRequest = oldRsbr;
     globalThis.gc = oldGc;
 
     // Check that tests were actually executed not including the optional step
@@ -537,6 +545,72 @@ describe("web-platform-tests", () => {
           done
         );
       });
+    });
+
+    describe("readable-byte-streams", () => {
+      // it("should pass bad-buffers-and-views.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/bad-buffers-and-views.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      it("should pass construct-byob-request.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/construct-byob-request.any.js")
+            .default,
+          done
+        );
+      });
+
+      // it("should pass enqueue-with-detached-buffer.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/enqueue-with-detached-buffer.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // it("should pass general.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/general.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // it("should pass non-transferable-buffers.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/non-transferable-buffers.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // it("should pass read-min.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/read-min.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // it("should pass respond-after-enqueue.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/respond-after-enqueue.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
+
+      // it("should pass tee.any.js tests", (done) => {
+      //   runTest(
+      //     require("./web-platform-tests/streams/readable-byte-streams/tee.any.js")
+      //       .default,
+      //     done
+      //   );
+      // });
     });
   });
 });
