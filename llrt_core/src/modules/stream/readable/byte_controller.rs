@@ -17,9 +17,9 @@ use rquickjs::{
 use super::{
     byob_reader::ReadableStreamReadIntoRequest, class_from_owned_borrow_mut, copy_data_block_bytes,
     promise_resolved_with, transfer_array_buffer, upon_promise, CancelAlgorithm, Null,
-    PullAlgorithm, ReadableStream, ReadableStreamController, ReadableStreamReadRequest,
-    ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, ReadableStreamState, StartAlgorithm,
-    Undefined, UnderlyingSource,
+    PullAlgorithm, ReadableStream, ReadableStreamBYOBReader, ReadableStreamController,
+    ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
+    ReadableStreamState, StartAlgorithm, Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]
@@ -33,7 +33,7 @@ pub(crate) struct ReadableByteStreamController<'js> {
     pull_again: bool,
     pull_algorithm: Option<PullAlgorithm<'js>>,
     pulling: bool,
-    pending_pull_intos: VecDeque<PullIntoDescriptor<'js>>,
+    pub(super) pending_pull_intos: VecDeque<PullIntoDescriptor<'js>>,
     queue: VecDeque<ReadableByteStreamQueueEntry<'js>>,
     queue_total_size: usize,
     started: bool,
@@ -104,7 +104,7 @@ impl<'js> ReadableByteStreamController<'js> {
         )
     }
 
-    fn set_up_readable_byte_stream_controller(
+    pub(super) fn set_up_readable_byte_stream_controller(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
@@ -180,7 +180,8 @@ impl<'js> ReadableByteStreamController<'js> {
                         // Perform ! ReadableByteStreamControllerError(controller, r).
                         Self::readable_byte_stream_controller_error(
                             &ctx, stream, controller, reader, r,
-                        )
+                        )?;
+                        Ok(())
                     },
                 }
             }
@@ -227,25 +228,34 @@ impl<'js> ReadableByteStreamController<'js> {
         upon_promise::<Value<'js>, _>(ctx, pull_promise, {
             let controller = controller.clone();
             let stream = stream.clone();
-            let reader = reader.clone();
             move |ctx, result| {
                 let mut controller = OwnedBorrowMut::from_class(controller);
-                let stream = OwnedBorrowMut::from_class(stream);
-                let reader = reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
+                let mut stream = OwnedBorrowMut::from_class(stream);
+                let reader = stream.reader_mut();
                 match result {
+                    // Upon fulfillment of pullPromise,
                     Ok(_) => {
+                        // Set controller.[[pulling]] to false.
                         controller.pulling = false;
+                        // If controller.[[pullAgain]] is true,
                         if controller.pull_again {
+                            // Set controller.[[pullAgain]] to false.
                             controller.pull_again = false;
+                            // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
                             Self::readable_byte_stream_controller_call_pull_if_needed(
                                 ctx, controller, stream, reader,
                             )?;
                         };
                         Ok(())
                     },
-                    Err(e) => Self::readable_byte_stream_controller_error(
-                        &ctx, stream, controller, reader, e,
-                    ),
+                    // Upon rejection of pullPromise with reason e,
+                    Err(e) => {
+                        // Perform ! ReadableByteStreamControllerError(controller, e).
+                        Self::readable_byte_stream_controller_error(
+                            &ctx, stream, controller, reader, e,
+                        )?;
+                        Ok(())
+                    },
                 }
             }
         })?;
@@ -306,17 +316,21 @@ impl<'js> ReadableByteStreamController<'js> {
         false
     }
 
-    fn readable_byte_stream_controller_error(
+    pub(super) fn readable_byte_stream_controller_error(
         ctx: &Ctx<'js>,
         // Let stream be controller.[[stream]].
-        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, Self>,
-        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         e: Value<'js>,
-    ) -> Result<()> {
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
         // If stream.[[state]] is not "readable", return.
         if stream.state != ReadableStreamState::Readable {
-            return Ok(());
+            return Ok((stream, controller, reader));
         }
 
         // Perform ! ReadableByteStreamControllerClearPendingPullIntos(controller).
@@ -329,9 +343,13 @@ impl<'js> ReadableByteStreamController<'js> {
         controller.readable_byte_stream_controller_clear_algorithms();
 
         // Perform ! ReadableStreamError(stream, e).
-        ReadableStream::readable_stream_error(ctx, stream, controller.into(), reader, e)?;
+        let mut c = controller.into();
+        (stream, c, reader) = ReadableStream::readable_stream_error(ctx, stream, c, reader, e)?;
+        controller = c
+            .into_byte_controller()
+            .expect("readable_stream_error must return the same type of controller");
 
-        Ok(())
+        Ok((stream, controller, reader))
     }
 
     fn readable_byte_stream_controller_clear_pending_pull_intos(&mut self) {
@@ -360,7 +378,7 @@ impl<'js> ReadableByteStreamController<'js> {
         self.cancel_algorithm = None;
     }
 
-    fn readable_byte_stream_controller_get_byob_request(
+    pub(super) fn readable_byte_stream_controller_get_byob_request(
         ctx: Ctx<'js>,
         controller: OwnedBorrowMut<'js, Self>,
     ) -> Result<Null<Class<'js, ReadableStreamBYOBRequest<'js>>>> {
@@ -384,7 +402,7 @@ impl<'js> ReadableByteStreamController<'js> {
                 // Set byobRequest.[[controller]] to controller.
                 controller: Some(controller_class),
                 // Set byobRequest.[[view]] to view.
-                view: Some(view.into_js(&ctx)?),
+                view: Some(view),
             };
 
             // Set controller.[[byobRequest]] to byobRequest.
@@ -419,16 +437,20 @@ impl<'js> ReadableByteStreamController<'js> {
         self.queue_total_size = 0;
     }
 
-    fn readable_byte_stream_controller_close(
-        ctx: &Ctx<'js>,
+    pub(super) fn readable_byte_stream_controller_close(
+        ctx: Ctx<'js>,
         // Let stream be controller.[[stream]].
-        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, Self>,
-        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
-    ) -> Result<()> {
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
         // If controller.[[closeRequested]] is true or stream.[[state]] is not "readable", return.
         if controller.close_requested || stream.state != ReadableStreamState::Readable {
-            return Ok(());
+            return Ok((stream, controller, reader));
         }
 
         // If controller.[[queueTotalSize]] > 0,
@@ -436,7 +458,7 @@ impl<'js> ReadableByteStreamController<'js> {
             // Set controller.[[closeRequested]] to true.
             controller.close_requested = true;
             // Return.
-            return Ok(());
+            return Ok((stream, controller, reader));
         }
 
         // If controller.[[pendingPullIntos]] is not empty,
@@ -449,7 +471,7 @@ impl<'js> ReadableByteStreamController<'js> {
                     r#"new TypeError("Insufficient bytes to fill elements in the given buffer")"#,
                 )?;
                 Self::readable_byte_stream_controller_error(
-                    ctx,
+                    &ctx,
                     stream,
                     controller,
                     reader,
@@ -459,20 +481,34 @@ impl<'js> ReadableByteStreamController<'js> {
             }
         }
 
-        Ok(())
+        // Perform ! ReadableByteStreamControllerClearAlgorithms(controller).
+        controller.readable_byte_stream_controller_clear_algorithms();
+
+        // Perform ! ReadableStreamClose(stream).
+        let mut c = controller.into();
+        (stream, c, reader) = ReadableStream::readable_stream_close(ctx, stream, c, reader)?;
+        controller = c
+            .into_byte_controller()
+            .expect("readable_stream_close must return the same type of controller");
+
+        Ok((stream, controller, reader))
     }
 
-    fn readable_byte_stream_controller_enqueue(
+    pub(super) fn readable_byte_stream_controller_enqueue(
         ctx: &Ctx<'js>,
         mut controller: OwnedBorrowMut<'js, Self>,
         // Let stream be controller.[[stream]].
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
         chunk: ObjectBytes<'js>,
-    ) -> Result<()> {
+    ) -> Result<(
+        OwnedBorrowMut<'js, Self>,
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
         // If controller.[[closeRequested]] is true or stream.[[state]] is not "readable", return.
         if controller.close_requested || stream.state != ReadableStreamState::Readable {
-            return Ok(());
+            return Ok((controller, stream, reader));
         }
 
         // Let buffer be chunk.[[ViewedArrayBuffer]].
@@ -496,19 +532,19 @@ impl<'js> ReadableByteStreamController<'js> {
             controller.pending_pull_intos[0]
                     .buffer
                     .as_raw()
-                    .ok_or(Exception::throw_type(
+                    .or_throw_type(
                         ctx,
-                        "The BYOB request's buffer has been detached and so cannot be filled with an enqueued chunk",
-                    ))?;
-
-            let existing_buffer = controller.pending_pull_intos[0].buffer.clone();
+                        Some("The BYOB request's buffer has been detached and so cannot be filled with an enqueued chunk"),
+                    )?;
 
             // Perform ! ReadableByteStreamControllerInvalidateBYOBRequest(controller).
             controller.readable_byte_stream_controller_invalidate_byob_request();
 
             // Set firstPendingPullInto’s buffer to ! TransferArrayBuffer(firstPendingPullInto’s buffer).
-            controller.pending_pull_intos[0].buffer =
-                transfer_array_buffer(ctx.clone(), existing_buffer)?;
+            controller.pending_pull_intos[0].buffer = transfer_array_buffer(
+                ctx.clone(),
+                controller.pending_pull_intos[0].buffer.clone(),
+            )?;
 
             // If firstPendingPullInto’s reader type is "none", perform ? ReadableByteStreamControllerEnqueueDetachedPullIntoToQueue(controller, firstPendingPullInto).
             if let PullIntoDescriptorReaderType::None = controller.pending_pull_intos[0].reader_type
@@ -591,13 +627,12 @@ impl<'js> ReadableByteStreamController<'js> {
         }
 
         // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
-        _ = Self::readable_byte_stream_controller_call_pull_if_needed(
+        Self::readable_byte_stream_controller_call_pull_if_needed(
             ctx.clone(),
             controller,
             stream,
             reader,
-        )?;
-        Ok(())
+        )
     }
 
     fn readable_byte_stream_enqueue_detached_pull_into_to_queue(
@@ -623,7 +658,7 @@ impl<'js> ReadableByteStreamController<'js> {
                     stream,
                     controller,
                     reader,
-                    buffer,
+                    &buffer,
                     byte_offset,
                     bytes_filled,
                 )?;
@@ -731,12 +766,12 @@ impl<'js> ReadableByteStreamController<'js> {
             }
 
             // Let pullIntoDescriptor be controller.[[pendingPullIntos]][0].
-            let pull_into_descriptor_ref = PullIntoDescriptorRef::Index(0);
+            let mut pull_into_descriptor_ref = PullIntoDescriptorRefMut::Index(0);
 
             // If ! ReadableByteStreamControllerFillPullIntoDescriptorFromQueue(controller, pullIntoDescriptor) is true,
             if controller.readable_byte_stream_controller_fill_pull_into_descriptor_from_queue(
                 ctx,
-                pull_into_descriptor_ref,
+                &mut pull_into_descriptor_ref,
             )? {
                 // Perform ! ReadableByteStreamControllerShiftPendingPullInto(controller).
                 let pull_into_descriptor =
@@ -761,7 +796,7 @@ impl<'js> ReadableByteStreamController<'js> {
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, Self>,
         reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
-        buffer: ArrayBuffer<'js>,
+        buffer: &ArrayBuffer<'js>,
         byte_offset: usize,
         byte_length: usize,
     ) -> Result<(
@@ -772,9 +807,9 @@ impl<'js> ReadableByteStreamController<'js> {
         // Let cloneResult be CloneArrayBuffer(buffer, byteOffset, byteLength, %ArrayBuffer%).
         let clone_result = match ArrayBuffer::new_copy(
             ctx.clone(),
-            buffer.as_bytes().expect(
+            &buffer.as_bytes().expect(
                 "ReadableByteStreamControllerEnqueueClonedChunkToQueue called on detached buffer",
-            ),
+            )[byte_offset..byte_offset + byte_length],
         ) {
             Ok(clone_result) => clone_result,
             Err(Error::Exception) => {
@@ -791,9 +826,10 @@ impl<'js> ReadableByteStreamController<'js> {
             Err(err) => return Err(err),
         };
 
+        // Perform ! ReadableByteStreamControllerEnqueueChunkToQueue(controller, cloneResult.[[Value]], 0, byteLength).
         controller.readable_byte_stream_controller_enqueue_chunk_to_queue(
             clone_result,
-            byte_offset,
+            0,
             byte_length,
         );
 
@@ -849,77 +885,100 @@ impl<'js> ReadableByteStreamController<'js> {
     }
 
     fn readable_byte_stream_controller_fill_pull_into_descriptor_from_queue<'a>(
-        &mut self,
+        &'a mut self,
         ctx: &Ctx<'js>,
-        pull_into_descriptor_ref: PullIntoDescriptorRef<'js, 'a>,
+        pull_into_descriptor_ref: &mut PullIntoDescriptorRefMut<'js, 'a>,
     ) -> Result<bool> {
-        let pull_into_descriptor = match &pull_into_descriptor_ref {
-            PullIntoDescriptorRef::Index(i) => &self.pending_pull_intos[*i],
-            PullIntoDescriptorRef::Owned(d) => d,
-        };
-        // Let maxBytesToCopy be min(controller.[[queueTotalSize]], pullIntoDescriptor’s byte length − pullIntoDescriptor’s bytes filled).
-        let max_bytes_to_copy: usize = std::cmp::min(
-            self.queue_total_size,
-            pull_into_descriptor.byte_length - pull_into_descriptor.bytes_filled,
-        );
+        let (mut total_bytes_to_copy_remaining, ready) = {
+            let pull_into_descriptor = match pull_into_descriptor_ref {
+                PullIntoDescriptorRefMut::Index(i) => &mut self.pending_pull_intos[*i],
+                PullIntoDescriptorRefMut::Owned(r) => r,
+            };
+            // Let maxBytesToCopy be min(controller.[[queueTotalSize]], pullIntoDescriptor’s byte length − pullIntoDescriptor’s bytes filled).
+            let max_bytes_to_copy: usize = std::cmp::min(
+                self.queue_total_size,
+                pull_into_descriptor.byte_length - pull_into_descriptor.bytes_filled,
+            );
 
-        // Let maxBytesFilled be pullIntoDescriptor’s bytes filled + maxBytesToCopy.
-        let max_bytes_filled = pull_into_descriptor.bytes_filled + max_bytes_to_copy;
+            // Let maxBytesFilled be pullIntoDescriptor’s bytes filled + maxBytesToCopy.
+            let max_bytes_filled = pull_into_descriptor.bytes_filled + max_bytes_to_copy;
 
-        // Let totalBytesToCopyRemaining be maxBytesToCopy.
-        let mut total_bytes_to_copy_remaining = max_bytes_to_copy;
+            // Let totalBytesToCopyRemaining be maxBytesToCopy.
+            let mut total_bytes_to_copy_remaining = max_bytes_to_copy;
 
-        // Let ready be false.
-        let mut ready = false;
+            // Let ready be false.
+            let mut ready = false;
 
-        // Let remainderBytes be the remainder after dividing maxBytesFilled by pullIntoDescriptor’s element size.
-        let remainder_bytes = max_bytes_filled % pull_into_descriptor.element_size;
+            // Let remainderBytes be the remainder after dividing maxBytesFilled by pullIntoDescriptor’s element size.
+            let remainder_bytes = max_bytes_filled % pull_into_descriptor.element_size;
 
-        // Let maxAlignedBytes be maxBytesFilled − remainderBytes.
-        let max_aligned_bytes = max_bytes_filled - remainder_bytes;
+            // Let maxAlignedBytes be maxBytesFilled − remainderBytes.
+            let max_aligned_bytes = max_bytes_filled - remainder_bytes;
 
-        // If maxAlignedBytes ≥ pullIntoDescriptor’s minimum fill,
-        if max_aligned_bytes > pull_into_descriptor.minimum_fill {
-            // Set totalBytesToCopyRemaining to maxAlignedBytes − pullIntoDescriptor’s bytes filled.
-            total_bytes_to_copy_remaining = max_aligned_bytes - pull_into_descriptor.bytes_filled;
-            // Set ready to true.
-            ready = true
-        }
-
-        // Let queue be controller.[[queue]].
-        let queue = &mut self.queue;
-        // While totalBytesToCopyRemaining > 0,
-        while total_bytes_to_copy_remaining > 0 {
-            // Let headOfQueue be queue[0].
-            let head_of_queue = queue.front_mut().expect("empty queue with bytes to copy");
-            // Let bytesToCopy be min(totalBytesToCopyRemaining, headOfQueue’s byte length).
-            let bytes_to_copy =
-                std::cmp::min(total_bytes_to_copy_remaining, head_of_queue.byte_length);
-            // Let destStart be pullIntoDescriptor’s byte offset + pullIntoDescriptor’s bytes filled.
-            let dest_start = pull_into_descriptor.byte_offset + pull_into_descriptor.bytes_filled;
-            // Perform ! CopyDataBlockBytes(pullIntoDescriptor’s buffer.[[ArrayBufferData]], destStart, headOfQueue’s buffer.[[ArrayBufferData]], headOfQueue’s byte offset, bytesToCopy).
-            copy_data_block_bytes(
-                ctx,
-                pull_into_descriptor.buffer.clone(),
-                dest_start,
-                head_of_queue.buffer.clone(),
-                head_of_queue.byte_offset,
-                bytes_to_copy,
-            )?;
-            if head_of_queue.byte_length == bytes_to_copy {
-                // If headOfQueue’s byte length is bytesToCopy,
-                // Remove queue[0].
-                queue.pop_front();
-            } else {
-                // Otherwise,
-                // Set headOfQueue’s byte offset to headOfQueue’s byte offset + bytesToCopy.
-                head_of_queue.byte_offset += bytes_to_copy;
-                // Set headOfQueue’s byte length to headOfQueue’s byte length − bytesToCopy.
-                head_of_queue.byte_length -= bytes_to_copy
+            // If maxAlignedBytes ≥ pullIntoDescriptor’s minimum fill,
+            if max_aligned_bytes >= pull_into_descriptor.minimum_fill {
+                // Set totalBytesToCopyRemaining to maxAlignedBytes − pullIntoDescriptor’s bytes filled.
+                total_bytes_to_copy_remaining =
+                    max_aligned_bytes - pull_into_descriptor.bytes_filled;
+                // Set ready to true.
+                ready = true
             }
 
-            // Set controller.[[queueTotalSize]] to controller.[[queueTotalSize]] − bytesToCopy.
-            self.queue_total_size -= bytes_to_copy;
+            (total_bytes_to_copy_remaining, ready)
+        };
+
+        // Let queue be controller.[[queue]].
+        // While totalBytesToCopyRemaining > 0,
+        while total_bytes_to_copy_remaining > 0 {
+            let bytes_to_copy = {
+                let pull_into_descriptor = match pull_into_descriptor_ref {
+                    PullIntoDescriptorRefMut::Index(i) => &mut self.pending_pull_intos[*i],
+                    PullIntoDescriptorRefMut::Owned(r) => r,
+                };
+
+                // Let headOfQueue be queue[0].
+                let head_of_queue = self
+                    .queue
+                    .front_mut()
+                    .expect("empty queue with bytes to copy");
+                // Let bytesToCopy be min(totalBytesToCopyRemaining, headOfQueue’s byte length).
+                let bytes_to_copy: usize =
+                    std::cmp::min(total_bytes_to_copy_remaining, head_of_queue.byte_length);
+                // Let destStart be pullIntoDescriptor’s byte offset + pullIntoDescriptor’s bytes filled.
+                let dest_start: usize =
+                    pull_into_descriptor.byte_offset + pull_into_descriptor.bytes_filled as usize;
+                // Perform ! CopyDataBlockBytes(pullIntoDescriptor’s buffer.[[ArrayBufferData]], destStart, headOfQueue’s buffer.[[ArrayBufferData]], headOfQueue’s byte offset, bytesToCopy).
+                copy_data_block_bytes(
+                    ctx,
+                    &pull_into_descriptor.buffer,
+                    dest_start,
+                    &head_of_queue.buffer,
+                    head_of_queue.byte_offset,
+                    bytes_to_copy,
+                )?;
+                if head_of_queue.byte_length == bytes_to_copy {
+                    // If headOfQueue’s byte length is bytesToCopy,
+                    // Remove queue[0].
+                    self.queue.pop_front();
+                } else {
+                    // Otherwise,
+                    // Set headOfQueue’s byte offset to headOfQueue’s byte offset + bytesToCopy.
+                    head_of_queue.byte_offset += bytes_to_copy;
+                    // Set headOfQueue’s byte length to headOfQueue’s byte length − bytesToCopy.
+                    head_of_queue.byte_length -= bytes_to_copy
+                }
+
+                // Set controller.[[queueTotalSize]] to controller.[[queueTotalSize]] − bytesToCopy.
+                self.queue_total_size -= bytes_to_copy;
+
+                bytes_to_copy
+            };
+
+            // Perform ! ReadableByteStreamControllerFillHeadPullIntoDescriptor(controller, bytesToCopy, pullIntoDescriptor).
+            self.readable_byte_stream_controller_fill_head_pull_into_descriptor(
+                bytes_to_copy,
+                pull_into_descriptor_ref,
+            );
 
             // Set totalBytesToCopyRemaining to totalBytesToCopyRemaining − bytesToCopy.
             total_bytes_to_copy_remaining -= bytes_to_copy
@@ -947,13 +1006,15 @@ impl<'js> ReadableByteStreamController<'js> {
             done = true
         }
 
+        let reader_type = pull_into_descriptor.reader_type;
+
         // Let filledView be ! ReadableByteStreamControllerConvertPullIntoDescriptor(pullIntoDescriptor).
         let filled_view = Self::readable_byte_stream_controller_convert_pull_into_descriptor(
             ctx.clone(),
-            &pull_into_descriptor,
+            pull_into_descriptor,
         )?;
 
-        if let PullIntoDescriptorReaderType::Default = pull_into_descriptor.reader_type {
+        if let PullIntoDescriptorReaderType::Default = reader_type {
             // If pullIntoDescriptor’s reader type is "default",
             let mut c = controller.into();
             // Perform ! ReadableStreamFulfillReadRequest(stream, filledView, done).
@@ -971,12 +1032,15 @@ impl<'js> ReadableByteStreamController<'js> {
         } else {
             // Otherwise,
             // Perform ! ReadableStreamFulfillReadIntoRequest(stream, filledView, done).
-            stream.readable_stream_fulfill_read_into_request(
+            let (s, c, r) = ReadableStream::readable_stream_fulfill_read_into_request(
                 &ctx,
-                reader.as_mut(),
+                stream,
+                controller,
+                reader,
                 filled_view,
                 done,
             )?;
+            (stream, controller, reader) = (s, c, Some(r.into()))
         }
         Ok((stream, controller, reader))
     }
@@ -1022,18 +1086,23 @@ impl<'js> ReadableByteStreamController<'js> {
 
     fn readable_byte_stream_controller_convert_pull_into_descriptor(
         ctx: Ctx<'js>,
-        pull_into_descriptor: &PullIntoDescriptor<'js>,
+        pull_into_descriptor: PullIntoDescriptor<'js>,
     ) -> Result<ObjectBytes<'js>> {
-        // Let bytesFilled be pullIntoDescriptor’s bytes filled.
-        let bytes_filled = pull_into_descriptor.bytes_filled;
-        // Let elementSize be pullIntoDescriptor’s element size.
-        let element_size = pull_into_descriptor.element_size;
+        let PullIntoDescriptor {
+            // Let bytesFilled be pullIntoDescriptor’s bytes filled.
+            bytes_filled,
+            // Let elementSize be pullIntoDescriptor’s element size.
+            element_size,
+            byte_offset,
+            buffer,
+            ..
+        } = pull_into_descriptor;
         // Let buffer be ! TransferArrayBuffer(pullIntoDescriptor’s buffer).
-        let buffer = transfer_array_buffer(ctx.clone(), pull_into_descriptor.buffer.clone());
+        let buffer = transfer_array_buffer(ctx.clone(), buffer);
         // Return ! Construct(pullIntoDescriptor’s view constructor, « buffer, pullIntoDescriptor’s byte offset, bytesFilled ÷ elementSize »).
         let view: Object = pull_into_descriptor.view_constructor.construct((
             buffer,
-            pull_into_descriptor.byte_offset,
+            byte_offset,
             bytes_filled / element_size,
         ))?;
         ObjectBytes::from(&ctx, &view)
@@ -1166,14 +1235,14 @@ impl<'js> ReadableByteStreamController<'js> {
         ctx: &Ctx<'js>,
         mut controller: OwnedBorrowMut<'js, Self>,
         // Let stream be controller.[[stream]].
-        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
         view: ObjectBytes<'js>,
-        min: usize,
+        min: u64,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
         // Set elementSize to the element size specified in the typed array constructors table for view.[[TypedArrayName]].
-        let (element_size, atom) = match view {
+        let (element_size, atom): (usize, PredefinedAtom) = match view {
             ObjectBytes::U8Array(_) => (1, PredefinedAtom::Uint8Array),
             ObjectBytes::I8Array(_) => (1, PredefinedAtom::Int8Array),
             ObjectBytes::U16Array(_) => (2, PredefinedAtom::Uint16Array),
@@ -1192,7 +1261,7 @@ impl<'js> ReadableByteStreamController<'js> {
         let ctor: Constructor = ctx.globals().get(atom)?;
 
         // Let minimumFill be min × elementSize.
-        let minimum_fill = min * element_size;
+        let minimum_fill: usize = (min as usize) * element_size;
 
         // Let byteOffset be view.[[ByteOffset]].
         // Let byteLength be view.[[ByteLength]].
@@ -1204,7 +1273,7 @@ impl<'js> ReadableByteStreamController<'js> {
             // If bufferResult is an abrupt completion,
             Err(Error::Exception) => {
                 // Perform readIntoRequest’s error steps, given bufferResult.[[Value]].
-                read_into_request.error_steps(ctx.catch())?;
+                read_into_request.error_steps(stream, controller, reader, ctx.catch())?;
                 // Return.
                 return Ok(());
             },
@@ -1215,7 +1284,7 @@ impl<'js> ReadableByteStreamController<'js> {
 
         let buffer_byte_length = buffer.len();
         // Let pullIntoDescriptor be a new pull-into descriptor with
-        let pull_into_descriptor = PullIntoDescriptor {
+        let mut pull_into_descriptor = PullIntoDescriptor {
             buffer,
             buffer_byte_length,
             byte_offset,
@@ -1235,10 +1304,7 @@ impl<'js> ReadableByteStreamController<'js> {
                 .push_back(pull_into_descriptor);
 
             // Perform ! ReadableStreamAddReadIntoRequest(stream, readIntoRequest).
-            ReadableStream::readable_stream_add_read_into_request(
-                reader.as_mut(),
-                read_into_request,
-            );
+            ReadableStream::readable_stream_add_read_into_request(&mut reader, read_into_request);
 
             // Return.
             return Ok(());
@@ -1247,14 +1313,14 @@ impl<'js> ReadableByteStreamController<'js> {
         // If stream.[[state]] is "closed",
         if let ReadableStreamState::Closed = stream.state {
             // Let emptyView be ! Construct(ctor, « pullIntoDescriptor’s buffer, pullIntoDescriptor’s byte offset, 0 »).
-            let empty_view: Value<'js> = ctor.call((
+            let empty_view: Value<'js> = ctor.construct((
                 pull_into_descriptor.buffer,
                 pull_into_descriptor.byte_offset,
                 0,
             ))?;
 
             // Perform readIntoRequest’s close steps, given emptyView.
-            read_into_request.close_steps(empty_view)?;
+            read_into_request.close_steps(stream, controller, reader, empty_view)?;
 
             // Return.
             return Ok(());
@@ -1265,7 +1331,7 @@ impl<'js> ReadableByteStreamController<'js> {
             // If ! ReadableByteStreamControllerFillPullIntoDescriptorFromQueue(controller, pullIntoDescriptor) is true,
             if controller.readable_byte_stream_controller_fill_pull_into_descriptor_from_queue(
                 ctx,
-                PullIntoDescriptorRef::Owned(&pull_into_descriptor),
+                &mut PullIntoDescriptorRefMut::Owned(&mut pull_into_descriptor),
             )? {
                 // Let filledView be ! ReadableByteStreamControllerConvertPullIntoDescriptor(pullIntoDescriptor).
                 let filled_view = controller
@@ -1275,15 +1341,19 @@ impl<'js> ReadableByteStreamController<'js> {
                     )?;
 
                 // Perform ! ReadableByteStreamControllerHandleQueueDrain(controller).
-                Self::readable_byte_stream_controller_handle_queue_drain(
+                let mut r = Some(reader.into());
+                (controller, stream, r) = Self::readable_byte_stream_controller_handle_queue_drain(
                     ctx.clone(),
                     controller,
                     stream,
-                    reader,
+                    r,
                 )?;
+                reader = r.and_then(|r| r.into_byob_reader()).expect(
+                    "readable_byte_stream_controller_handle_queue_drain must return the same type of reader",
+                );
 
                 // Perform readIntoRequest’s chunk steps, given filledView.
-                read_into_request.chunk_steps(filled_view)?;
+                read_into_request.chunk_steps(stream, controller, reader, filled_view)?;
 
                 // Return.
                 return Ok(());
@@ -1297,16 +1367,20 @@ impl<'js> ReadableByteStreamController<'js> {
                 )?;
 
                 // Perform ! ReadableByteStreamControllerError(controller, e).
-                Self::readable_byte_stream_controller_error(
+                let mut r = Some(reader.into());
+                (stream, controller, r) = Self::readable_byte_stream_controller_error(
                     ctx,
                     stream,
                     controller,
-                    reader,
+                    r,
                     e.clone(),
                 )?;
+                reader = r.and_then(|r| r.into_byob_reader()).expect(
+                    "readable_byte_stream_controller_error must return the same type of reader",
+                );
 
                 // Perform readIntoRequest’s error steps, given e.
-                read_into_request.error_steps(e)?;
+                read_into_request.error_steps(stream, controller, reader, e)?;
 
                 // Return.
                 return Ok(());
@@ -1319,14 +1393,14 @@ impl<'js> ReadableByteStreamController<'js> {
             .push_back(pull_into_descriptor);
 
         // Perform ! ReadableStreamAddReadIntoRequest(stream, readIntoRequest).
-        ReadableStream::readable_stream_add_read_into_request(reader.as_mut(), read_into_request);
+        ReadableStream::readable_stream_add_read_into_request(&mut reader, read_into_request);
 
         // Perform ! ReadableByteStreamControllerCallPullIfNeeded(controller).
         Self::readable_byte_stream_controller_call_pull_if_needed(
             ctx.clone(),
             controller,
             stream,
-            reader,
+            Some(reader.into()),
         )?;
 
         Ok(())
@@ -1344,14 +1418,338 @@ impl<'js> ReadableByteStreamController<'js> {
         let element_size = pull_into_descriptor.element_size;
 
         // Let buffer be ! TransferArrayBuffer(pullIntoDescriptor’s buffer).
-        let buffer = transfer_array_buffer(ctx, pull_into_descriptor.buffer)?;
+        let buffer = transfer_array_buffer(ctx.clone(), pull_into_descriptor.buffer)?;
 
         // Return ! Construct(pullIntoDescriptor’s view constructor, « buffer, pullIntoDescriptor’s byte offset, bytesFilled ÷ elementSize »).
-        pull_into_descriptor.view_constructor.call((
+        pull_into_descriptor.view_constructor.construct((
             buffer,
             pull_into_descriptor.byte_offset,
             bytes_filled / element_size,
         ))
+    }
+
+    pub(super) fn readable_byte_stream_controller_respond(
+        ctx: Ctx<'js>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        bytes_written: usize,
+    ) -> Result<()> {
+        // Let firstDescriptor be controller.[[pendingPullIntos]][0].
+        let first_descriptor = &mut controller.pending_pull_intos[0];
+
+        // Let state be controller.[[stream]].[[state]].
+        match stream.state {
+            // If state is "closed",
+            ReadableStreamState::Closed => {
+                // If bytesWritten is not 0, throw a TypeError exception.
+                if bytes_written != 0 {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "bytesWritten must be 0 when calling respond() on a closed stream",
+                    ));
+                }
+            },
+            // Otherwise,
+            _ => {
+                // If bytesWritten is 0, throw a TypeError exception.
+                if bytes_written == 0 {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "bytesWritten must be greater than 0 when calling respond() on a readable stream",
+                    ));
+                }
+
+                // If firstDescriptor’s bytes filled + bytesWritten > firstDescriptor’s byte length, throw a RangeError exception.
+                if first_descriptor.bytes_filled + bytes_written > first_descriptor.byte_length {
+                    return Err(Exception::throw_range(&ctx, "bytesWritten out of range'"));
+                }
+            },
+        };
+
+        // Set firstDescriptor’s buffer to ! TransferArrayBuffer(firstDescriptor’s buffer).
+        first_descriptor.buffer =
+            transfer_array_buffer(ctx.clone(), first_descriptor.buffer.clone())?;
+
+        // Perform ? ReadableByteStreamControllerRespondInternal(controller, bytesWritten).
+        Self::readable_byte_stream_controller_respond_internal(
+            ctx,
+            stream,
+            controller,
+            reader,
+            bytes_written,
+        )
+    }
+
+    fn readable_byte_stream_controller_respond_internal(
+        ctx: Ctx<'js>,
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        bytes_written: usize,
+    ) -> Result<()> {
+        // Let firstDescriptor be controller.[[pendingPullIntos]][0].
+        let first_descriptor_index = 0;
+
+        // Perform ! ReadableByteStreamControllerInvalidateBYOBRequest(controller).
+        controller.readable_byte_stream_controller_invalidate_byob_request();
+
+        // Let state be controller.[[stream]].[[state]].
+        match stream.state {
+            // If state is "closed",
+            ReadableStreamState::Closed => {
+                // Perform ! ReadableByteStreamControllerRespondInClosedState(controller, firstDescriptor).
+                (stream, controller, reader) =
+                    Self::readable_byte_stream_controller_respond_in_closed_state(
+                        ctx.clone(),
+                        stream,
+                        controller,
+                        reader,
+                        first_descriptor_index,
+                    )?;
+            },
+            // Otherwise
+            _ => {
+                // Perform ? ReadableByteStreamControllerRespondInReadableState(controller, bytesWritten, firstDescriptor).
+                (stream, controller, reader) =
+                    Self::readable_byte_stream_controller_respond_in_readable_state(
+                        ctx.clone(),
+                        stream,
+                        controller,
+                        reader,
+                        bytes_written,
+                        first_descriptor_index,
+                    )?
+            },
+        };
+
+        _ = Self::readable_byte_stream_controller_call_pull_if_needed(
+            ctx, controller, stream, reader,
+        )?;
+        Ok(())
+    }
+
+    fn readable_byte_stream_controller_respond_in_closed_state(
+        ctx: Ctx<'js>,
+        // Let stream be controller.[[stream]].
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        first_descriptor_index: usize,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
+        // If firstDescriptor’s reader type is "none", perform ! ReadableByteStreamControllerShiftPendingPullInto(controller).
+        if let PullIntoDescriptorReaderType::None =
+            controller.pending_pull_intos[first_descriptor_index].reader_type
+        {
+            controller.readable_byte_stream_controller_shift_pending_pull_into();
+        }
+
+        // If ! ReadableStreamHasBYOBReader(stream) is true,
+        if stream.readable_stream_has_byob_reader() {
+            // While ! ReadableStreamGetNumReadIntoRequests(stream) > 0,
+            while ReadableStream::readable_stream_get_num_read_into_requests(reader.as_ref()) > 0 {
+                // Let pullIntoDescriptor be ! ReadableByteStreamControllerShiftPendingPullInto(controller).
+                let pull_into_descriptor =
+                    controller.readable_byte_stream_controller_shift_pending_pull_into();
+
+                // Perform ! ReadableByteStreamControllerCommitPullIntoDescriptor(stream, pullIntoDescriptor).
+                (stream, controller, reader) =
+                    Self::readable_byte_stream_controller_commit_pull_into_descriptor(
+                        ctx.clone(),
+                        stream,
+                        controller,
+                        reader,
+                        pull_into_descriptor,
+                    )?;
+            }
+        }
+        Ok((stream, controller, reader))
+    }
+
+    fn readable_byte_stream_controller_respond_in_readable_state(
+        ctx: Ctx<'js>,
+        // Let stream be controller.[[stream]].
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        bytes_written: usize,
+        pull_into_descriptor_index: usize,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, Self>,
+        Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+    )> {
+        // Perform ! ReadableByteStreamControllerFillHeadPullIntoDescriptor(controller, bytesWritten, pullIntoDescriptor).
+        controller.readable_byte_stream_controller_fill_head_pull_into_descriptor(
+            bytes_written,
+            &mut PullIntoDescriptorRefMut::Index(pull_into_descriptor_index),
+        );
+
+        // If pullIntoDescriptor’s reader type is "none",
+        if let PullIntoDescriptorReaderType::None =
+            controller.pending_pull_intos[pull_into_descriptor_index].reader_type
+        {
+            // Perform ? ReadableByteStreamControllerEnqueueDetachedPullIntoToQueue(controller, pullIntoDescriptor).
+            (stream, controller, reader) =
+                Self::readable_byte_stream_enqueue_detached_pull_into_to_queue(
+                    ctx.clone(),
+                    stream,
+                    controller,
+                    reader,
+                    pull_into_descriptor_index,
+                )?;
+            // Perform ! ReadableByteStreamControllerProcessPullIntoDescriptorsUsingQueue(controller).
+            (stream, controller, reader) =
+                Self::readable_byte_stream_controller_process_pull_into_descriptors_using_queue(
+                    &ctx, stream, controller, reader,
+                )?;
+            // Return.
+            return Ok((stream, controller, reader));
+        }
+
+        // If pullIntoDescriptor’s bytes filled < pullIntoDescriptor’s minimum fill, return.
+        if controller.pending_pull_intos[pull_into_descriptor_index].bytes_filled
+            < controller.pending_pull_intos[pull_into_descriptor_index].minimum_fill
+        {
+            return Ok((stream, controller, reader));
+        }
+
+        // Perform ! ReadableByteStreamControllerShiftPendingPullInto(controller).
+        let mut pull_into_descriptor =
+            controller.readable_byte_stream_controller_shift_pending_pull_into();
+
+        // Let remainderSize be the remainder after dividing pullIntoDescriptor’s bytes filled by pullIntoDescriptor’s element size.
+        let remainder_size = pull_into_descriptor.bytes_filled % pull_into_descriptor.element_size;
+
+        // If remainderSize > 0,
+        if remainder_size > 0 {
+            // Let end be pullIntoDescriptor’s byte offset + pullIntoDescriptor’s bytes filled.
+            let end = pull_into_descriptor.byte_offset + pull_into_descriptor.bytes_filled;
+
+            let buffer = pull_into_descriptor.buffer.clone();
+
+            // Perform ? ReadableByteStreamControllerEnqueueClonedChunkToQueue(controller, pullIntoDescriptor’s buffer, end − remainderSize, remainderSize).
+            (stream, controller, reader) =
+                Self::readable_byte_stream_controller_enqueue_cloned_chunk_to_queue(
+                    ctx.clone(),
+                    stream,
+                    controller,
+                    reader,
+                    &buffer,
+                    end - remainder_size,
+                    remainder_size,
+                )?;
+        }
+
+        // Set pullIntoDescriptor’s bytes filled to pullIntoDescriptor’s bytes filled − remainderSize.
+        pull_into_descriptor.bytes_filled -= remainder_size;
+
+        // Perform ! ReadableByteStreamControllerCommitPullIntoDescriptor(controller.[[stream]], pullIntoDescriptor).
+        (stream, controller, reader) =
+            Self::readable_byte_stream_controller_commit_pull_into_descriptor(
+                ctx.clone(),
+                stream,
+                controller,
+                reader,
+                pull_into_descriptor,
+            )?;
+
+        // Perform ! ReadableByteStreamControllerProcessPullIntoDescriptorsUsingQueue(controller).
+        (stream, controller, reader) =
+            Self::readable_byte_stream_controller_process_pull_into_descriptors_using_queue(
+                &ctx, stream, controller, reader,
+            )?;
+
+        Ok((stream, controller, reader))
+    }
+
+    pub(super) fn readable_byte_stream_controller_respond_with_new_view(
+        ctx: Ctx<'js>,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, Self>,
+        reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
+        view: ObjectBytes<'js>,
+    ) -> Result<()> {
+        // Let firstDescriptor be controller.[[pendingPullIntos]][0].
+        let first_descriptor_index = 0;
+
+        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?.unwrap();
+
+        // Let state be controller.[[stream]].[[state]].
+        match stream.state {
+            // If state is "closed",
+            ReadableStreamState::Closed => {
+                // If view.[[ByteLength]] is not 0, throw a TypeError exception.
+                if byte_length != 0 {
+                    return Err(Exception::throw_type(&ctx, "The view's length must be 0 when calling respondWithNewView() on a closed stream"));
+                }
+            },
+            // Otherwise
+            _ => {
+                // If view.[[ByteLength]] is 0, throw a TypeError exception.
+                if byte_length == 0 {
+                    return Err(Exception::throw_type(&ctx, "The view's length must be greater than 0 when calling respondWithNewView() on a readable stream"));
+                }
+            },
+        };
+
+        {
+            let first_descriptor = &mut controller.pending_pull_intos[first_descriptor_index];
+
+            // If firstDescriptor’s byte offset + firstDescriptor’ bytes filled is not view.[[ByteOffset]], throw a RangeError exception.
+            if first_descriptor.byte_offset + first_descriptor.bytes_filled != byte_offset {
+                return Err(Exception::throw_range(
+                    &ctx,
+                    "The region specified by view does not match byobRequest",
+                ));
+            };
+
+            // If firstDescriptor’s buffer byte length is not view.[[ViewedArrayBuffer]].[[ByteLength]], throw a RangeError exception.
+            if first_descriptor.buffer_byte_length != buffer.len() {
+                return Err(Exception::throw_range(
+                    &ctx,
+                    "The buffer of view has different capacity than byobRequest",
+                ));
+            };
+
+            // If firstDescriptor’s bytes filled + view.[[ByteLength]] > firstDescriptor’s byte length, throw a RangeError exception.
+            if first_descriptor.bytes_filled + byte_length > first_descriptor.byte_length {
+                return Err(Exception::throw_range(
+                    &ctx,
+                    "The region specified by view is larger than byobRequest",
+                ));
+            }
+
+            // Set firstDescriptor’s buffer to ? TransferArrayBuffer(view.[[ViewedArrayBuffer]]).
+            first_descriptor.buffer = transfer_array_buffer(ctx.clone(), buffer)?;
+        }
+
+        // Perform ? ReadableByteStreamControllerRespondInternal(controller, viewByteLength).
+        Self::readable_byte_stream_controller_respond_internal(
+            ctx,
+            stream,
+            controller,
+            reader,
+            byte_length,
+        )
+    }
+
+    fn readable_byte_stream_controller_fill_head_pull_into_descriptor<'a>(
+        &mut self,
+        size: usize,
+        pull_into_descriptor_ref: &mut PullIntoDescriptorRefMut<'js, 'a>,
+    ) {
+        let pull_into_descriptor = match pull_into_descriptor_ref {
+            PullIntoDescriptorRefMut::Index(i) => &mut self.pending_pull_intos[*i],
+            PullIntoDescriptorRefMut::Owned(r) => *r,
+        };
+
+        // Set pullIntoDescriptor’s bytes filled to bytes filled + size.
+        pull_into_descriptor.bytes_filled += size;
     }
 
     fn start_algorithm(
@@ -1484,7 +1882,8 @@ impl<'js> ReadableByteStreamController<'js> {
         let reader = stream.reader_mut();
 
         // Perform ? ReadableByteStreamControllerClose(this).
-        Self::readable_byte_stream_controller_close(&ctx, stream, controller.0, reader)
+        Self::readable_byte_stream_controller_close(ctx, stream, controller.0, reader)?;
+        Ok(())
     }
 
     // undefined enqueue(ArrayBufferView chunk);
@@ -1542,7 +1941,8 @@ impl<'js> ReadableByteStreamController<'js> {
         let reader = stream.reader_mut();
 
         // Return ? ReadableByteStreamControllerEnqueue(this, chunk).
-        Self::readable_byte_stream_controller_enqueue(&ctx, this.0, stream, reader, chunk)
+        Self::readable_byte_stream_controller_enqueue(&ctx, this.0, stream, reader, chunk)?;
+        Ok(())
     }
 
     // undefined error(optional any e);
@@ -1555,26 +1955,120 @@ impl<'js> ReadableByteStreamController<'js> {
         let reader = stream.reader_mut();
 
         // Perform ! ReadableByteStreamControllerError(this, e).
-        Self::readable_byte_stream_controller_error(&ctx, stream, controller.0, reader, e)
+        Self::readable_byte_stream_controller_error(&ctx, stream, controller.0, reader, e)?;
+        Ok(())
     }
 }
 
 #[derive(Trace, Clone)]
 #[rquickjs::class]
 pub(crate) struct ReadableStreamBYOBRequest<'js> {
-    view: Option<Value<'js>>,
+    pub(super) view: Option<ObjectBytes<'js>>,
     controller: Option<Class<'js, ReadableByteStreamController<'js>>>,
 }
 
-#[methods]
+#[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamBYOBRequest<'js> {
     #[qjs(constructor)]
     fn new(ctx: Ctx<'js>) -> Result<Class<'js, Self>> {
         Err(Exception::throw_type(&ctx, "Illegal constructor"))
     }
+
+    #[qjs(get)]
+    fn view(&self) -> Null<ObjectBytes<'js>> {
+        Null(self.view.clone())
+    }
+
+    fn respond(
+        ctx: Ctx<'js>,
+        byob_request: This<OwnedBorrow<'js, Self>>,
+        bytes_written: usize,
+    ) -> Result<()> {
+        // If this.[[controller]] is undefined, throw a TypeError exception.
+        let (controller, view) = match (&byob_request.controller, &byob_request.view) {
+            (Some(controller), Some(view)) => (controller.clone(), view),
+            _ => {
+                return Err(Exception::throw_type(
+                    &ctx,
+                    "This BYOB request has been invalidated",
+                ));
+            },
+        };
+        let (buffer, _, _) = view.get_array_buffer()?.unwrap();
+        drop(byob_request);
+
+        // If ! IsDetachedBuffer(this.[[view]].[[ArrayBuffer]]) is true, throw a TypeError exception.
+        if buffer.as_bytes().is_none() {
+            return Err(Exception::throw_type(
+                &ctx,
+                "The BYOB request's buffer has been detached and so cannot be used as a response",
+            ));
+        }
+
+        let controller = OwnedBorrowMut::from_class(controller);
+        let mut stream = OwnedBorrowMut::from_class(
+            controller
+                .stream
+                .clone()
+                .expect("ReadableByteStreamControllerRespond called without stream"),
+        );
+
+        let reader = stream.reader_mut();
+
+        // Perform ? ReadableByteStreamControllerRespond(this.[[controller]], bytesWritten).
+        ReadableByteStreamController::readable_byte_stream_controller_respond(
+            ctx,
+            stream,
+            controller,
+            reader,
+            bytes_written,
+        )
+    }
+    fn respond_with_new_view(
+        ctx: Ctx<'js>,
+        byob_request: This<OwnedBorrow<'js, Self>>,
+        view: ObjectBytes<'js>,
+    ) -> Result<()> {
+        // If this.[[controller]] is undefined, throw a TypeError exception.
+        let controller = match &byob_request.controller {
+            Some(controller) => controller.clone(),
+            _ => {
+                return Err(Exception::throw_type(
+                    &ctx,
+                    "This BYOB request has been invalidated",
+                ));
+            },
+        };
+        drop(byob_request);
+
+        let (buffer, _, _) = view.get_array_buffer()?.unwrap();
+
+        // If ! IsDetachedBuffer(view.[[ViewedArrayBuffer]]) is true, throw a TypeError exception.
+        if buffer.as_bytes().is_none() {
+            return Err(Exception::throw_type(
+                &ctx,
+                "The given view's buffer has been detached and so cannot be used as a response",
+            ));
+        }
+
+        let controller = OwnedBorrowMut::from_class(controller);
+        let mut stream = OwnedBorrowMut::from_class(
+            controller
+                .stream
+                .clone()
+                .expect("ReadableByteStreamControllerRespond called without stream"),
+        );
+
+        let reader = stream.reader_mut();
+
+        // Return ? ReadableByteStreamControllerRespondWithNewView(this.[[controller]], view).
+        ReadableByteStreamController::readable_byte_stream_controller_respond_with_new_view(
+            ctx, stream, controller, reader, view,
+        )
+    }
 }
 
-struct PullIntoDescriptor<'js> {
+pub(super) struct PullIntoDescriptor<'js> {
     buffer: ArrayBuffer<'js>,
     buffer_byte_length: usize,
     byte_offset: usize,
@@ -1600,12 +2094,12 @@ impl<'js> Trace<'js> for PullIntoDescriptor<'js> {
     }
 }
 
-enum PullIntoDescriptorRef<'js, 'a> {
+enum PullIntoDescriptorRefMut<'js, 'a> {
     Index(usize),
-    Owned(&'a PullIntoDescriptor<'js>),
+    Owned(&'a mut PullIntoDescriptor<'js>),
 }
 
-#[derive(Trace)]
+#[derive(Trace, Clone, Copy)]
 enum PullIntoDescriptorReaderType {
     Default,
     Byob,

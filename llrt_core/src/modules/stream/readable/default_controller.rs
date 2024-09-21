@@ -219,11 +219,10 @@ impl<'js> ReadableStreamDefaultController<'js> {
         upon_promise::<Value<'js>, _>(ctx.clone(), pull_promise, {
             let controller = controller.clone();
             let stream = stream.clone();
-            let reader = reader.clone();
             move |ctx, result| {
                 let mut controller = OwnedBorrowMut::from_class(controller);
-                let stream = OwnedBorrowMut::from_class(stream);
-                let reader = reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
+                let mut stream = OwnedBorrowMut::from_class(stream);
+                let reader = stream.reader_mut();
                 match result {
                     // Upon fulfillment of pullPromise,
                     Ok(_) => {

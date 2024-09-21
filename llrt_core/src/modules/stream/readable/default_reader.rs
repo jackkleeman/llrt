@@ -135,7 +135,9 @@ impl<'js> ReadableStreamDefaultReader<'js> {
         // Perform ! ReadableStreamReaderGenericRelease(reader).
         reader
             .generic
-            .readable_stream_reader_generic_release(ctx, &mut stream, &mut controller)?;
+            .readable_stream_reader_generic_release(ctx, &mut stream, || {
+                controller.release_steps()
+            })?;
 
         // Let e be a new TypeError exception.
         let e: Value = ctx.eval(r#"new TypeError("Reader was released")"#)?;

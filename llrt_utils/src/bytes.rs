@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use rquickjs::{
+    atom::PredefinedAtom,
+    class::{Trace, Tracer},
+    function::Constructor,
     ArrayBuffer, Coerced, Ctx, Exception, FromJs, IntoJs, Object, Result, TypedArray, Value,
 };
 
@@ -23,6 +26,25 @@ pub enum ObjectBytes<'js> {
     Vec(Vec<u8>),
 }
 
+impl<'js> Trace<'js> for ObjectBytes<'js> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        match self {
+            ObjectBytes::U8Array(a) => a.trace(tracer),
+            ObjectBytes::I8Array(a) => a.trace(tracer),
+            ObjectBytes::U16Array(a) => a.trace(tracer),
+            ObjectBytes::I16Array(a) => a.trace(tracer),
+            ObjectBytes::U32Array(a) => a.trace(tracer),
+            ObjectBytes::I32Array(a) => a.trace(tracer),
+            ObjectBytes::U64Array(a) => a.trace(tracer),
+            ObjectBytes::I64Array(a) => a.trace(tracer),
+            ObjectBytes::F32Array(a) => a.trace(tracer),
+            ObjectBytes::F64Array(a) => a.trace(tracer),
+            ObjectBytes::DataView(d) => d.trace(tracer),
+            ObjectBytes::Vec(v) => v.trace(tracer),
+        }
+    }
+}
+
 impl<'js> IntoJs<'js> for ObjectBytes<'js> {
     fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
         match self {
@@ -36,7 +58,10 @@ impl<'js> IntoJs<'js> for ObjectBytes<'js> {
             ObjectBytes::I64Array(a) => a.into_js(ctx),
             ObjectBytes::F32Array(a) => a.into_js(ctx),
             ObjectBytes::F64Array(a) => a.into_js(ctx),
-            ObjectBytes::DataView(d) => d.into_js(ctx),
+            ObjectBytes::DataView(d) => {
+                let ctor: Constructor = ctx.globals().get(PredefinedAtom::DataView)?;
+                ctor.construct((d,))
+            },
             ObjectBytes::Vec(v) => v.into_js(ctx),
         }
     }

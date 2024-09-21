@@ -8,7 +8,7 @@
 export default function(
   ctx
 ) {
-const { promise_test, test, assert_equals, assert_array_equals, assert_true } = ctx;
+const { promise_test, test, assert_equals, assert_array_equals, assert_true, assert_not_equals, promise_rejects_exactly, assert_object_equals } = ctx;
 
 require("../resources/rs-utils.js").default(ctx);
 require("../resources/test-utils.js").default(ctx);

@@ -588,13 +588,13 @@ describe("web-platform-tests", () => {
       //   );
       // });
 
-      // it("should pass read-min.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-byte-streams/read-min.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass read-min.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/read-min.any.js")
+            .default,
+          done
+        );
+      });
 
       // it("should pass respond-after-enqueue.any.js tests", (done) => {
       //   runTest(
@@ -604,13 +604,13 @@ describe("web-platform-tests", () => {
       //   );
       // });
 
-      // it("should pass tee.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-byte-streams/tee.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass tee.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/tee.any.js")
+            .default,
+          done
+        );
+      });
     });
   });
 });

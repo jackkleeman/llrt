@@ -23,27 +23,34 @@ pub(crate) struct ReadableStreamBYOBReader<'js> {
 
 impl<'js> ReadableStreamBYOBReader<'js> {
     pub(super) fn readable_stream_byob_reader_error_read_into_requests(
-        &mut self,
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        mut reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
         e: Value<'js>,
-    ) -> Result<()> {
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+    )> {
         // Let readIntoRequests be reader.[[readIntoRequests]].
-        let read_into_requests = &mut self.read_into_requests;
+        let read_into_requests = &mut reader.read_into_requests;
 
         // Set reader.[[readIntoRequests]] to a new empty list.
         let read_into_requests = read_into_requests.split_off(0);
         // For each readIntoRequest of readIntoRequests,
         for read_into_request in read_into_requests {
             // Perform readIntoRequest’s error steps, given e.
-            read_into_request.error_steps(e.clone())?;
+            (stream, controller, reader) =
+                read_into_request.error_steps(stream, controller, reader, e.clone())?;
         }
 
-        Ok(())
+        Ok((stream, controller, reader))
     }
 
-    fn set_up_readable_stream_byob_reader(
+    pub(super) fn set_up_readable_stream_byob_reader(
         ctx: Ctx<'js>,
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
-    ) -> Result<Class<'js, Self>> {
+    ) -> Result<(OwnedBorrowMut<'js, ReadableStream<'js>>, Class<'js, Self>)> {
         // If ! IsReadableStreamLocked(stream) is true, throw a TypeError exception.
         if stream.is_readable_stream_locked() {
             return Err(Exception::throw_type(
@@ -84,76 +91,68 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             reader.clone(),
         ));
 
-        Ok(reader)
+        Ok((stream, reader))
     }
 
-    fn readable_stream_byob_reader_release(
-        &mut self,
+    pub(super) fn readable_stream_byob_reader_release(
         ctx: &Ctx<'js>,
-        stream: &mut ReadableStream<'js>,
-        controller: &mut ReadableStreamControllerOwnedBorrowMut<'js>,
-    ) -> Result<()> {
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        mut controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        mut reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+    )> {
         // Perform ! ReadableStreamReaderGenericRelease(reader).
-        self.generic
-            .readable_stream_reader_generic_release(ctx, stream, controller)?;
+        reader
+            .generic
+            .readable_stream_reader_generic_release(ctx, &mut stream, || {
+                controller.release_steps()
+            })?;
 
         // Let e be a new TypeError exception.
         let e: Value = ctx.eval(r#"new TypeError("Reader was released")"#)?;
         // Perform ! ReadableStreamBYOBReaderErrorReadIntoRequests(reader, e).
-        self.readable_stream_byob_reader_error_read_into_requests(e)
+        (stream, controller, _) = Self::readable_stream_byob_reader_error_read_into_requests(
+            stream, controller, reader, e,
+        )?;
+        Ok((stream, controller))
     }
 
-    fn readable_stream_byob_reader_read(
+    pub(super) fn readable_stream_byob_reader_read(
         ctx: &Ctx<'js>,
+        // Let stream be reader.[[stream]].
+        mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
         reader: OwnedBorrowMut<'js, Self>,
         view: ObjectBytes<'js>,
-        min: usize,
+        min: u64,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
-        // Let stream be reader.[[stream]].
-        // Assert: stream is not undefined.
-        let mut stream = OwnedBorrowMut::from_class(
-            reader
-                .generic
-                .stream
-                .clone()
-                .expect("ReadableStreamBYOBReaderRead called without stream"),
-        );
-
         // Set stream.[[disturbed]] to true.
         stream.disturbed = true;
 
         // If stream.[[state]] is "errored", perform readIntoRequest’s error steps given stream.[[storedError]].
         if let ReadableStreamState::Errored = stream.state {
-            read_into_request.error_steps(
-                stream
-                    .stored_error
-                    .clone()
-                    .expect("stream in error state without stored error")
-                    .clone(),
-            )
+            let stored_error = stream
+                .stored_error
+                .clone()
+                .expect("stream in error state without stored error")
+                .clone();
+            read_into_request.error_steps(stream, controller, reader, stored_error)?;
         } else {
             // Otherwise, perform ! ReadableByteStreamControllerPullInto(stream.[[controller]], view, min, readIntoRequest).
-            match &stream.controller {
-                Some(ReadableStreamController::ReadableStreamByteController(c)) => {
-                    let c = OwnedBorrowMut::from_class(c.clone());
-                    ReadableByteStreamController::readable_byte_stream_controller_pull_into(
-                        ctx,
-                        c,
-                        stream,
-                        Some(reader.into()),
-                        view,
-                        min,
-                        read_into_request,
-                    )
-                },
-                _ => {
-                    panic!(
-                        "ReadableStreamBYOBReaderRead called without ReadableStreamByteController"
-                    )
-                },
-            }
+            ReadableByteStreamController::readable_byte_stream_controller_pull_into(
+                ctx,
+                controller,
+                stream,
+                reader,
+                view,
+                min,
+                read_into_request,
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -165,15 +164,27 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
     ) -> Result<Class<'js, Self>> {
         // Perform ? SetUpReadableStreamBYOBReader(this, stream).
-        Self::set_up_readable_stream_byob_reader(ctx, stream)
+        let (_, reader) = Self::set_up_readable_stream_byob_reader(ctx, stream)?;
+        Ok(reader)
     }
 
     fn read(
         ctx: Ctx<'js>,
         reader: This<OwnedBorrowMut<'js, Self>>,
         view: ObjectBytes<'js>,
-        options: Opt<ReadableStreamBYOBReaderReadOptions>,
+        options: Opt<Value<'js>>,
     ) -> Result<Promise<'js>> {
+        let options = match options.0 {
+            None => ReadableStreamBYOBReaderReadOptions { min: 1 },
+            Some(value) => match ReadableStreamBYOBReaderReadOptions::from_js(&ctx, value) {
+                Ok(value) => value,
+                Err(Error::Exception) => {
+                    return promise_rejected_with(&ctx, ctx.catch());
+                },
+                Err(err) => return Err(err),
+            },
+        };
+
         let (buffer, byte_length, _) = view.get_array_buffer()?.unwrap();
         // If view.[[ByteLength]] is 0, return a promise rejected with a TypeError exception.
         if byte_length == 0 {
@@ -193,10 +204,6 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             let e: Value = ctx.eval(r#"new TypeError("view's buffer has been detached")"#)?;
             return promise_rejected_with(&ctx, e);
         }
-
-        let options = options
-            .0
-            .unwrap_or(ReadableStreamBYOBReaderReadOptions { min: 1 });
 
         // If options["min"] is 0, return a promise rejected with a TypeError exception.
         if options.min == 0 {
@@ -220,17 +227,18 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         };
         if let Some(typed_array_len) = typed_array_len {
             // If options["min"] > view.[[ArrayLength]], return a promise rejected with a RangeError exception.
-            if options.min > typed_array_len {
+            if options.min > typed_array_len as u64 {
                 let e: Value = ctx.eval(
-                    r#"new TypeError("options.min must be less than or equal to views length")"#,
+                    r#"new RangeError("options.min must be less than or equal to views length")"#,
                 )?;
                 return promise_rejected_with(&ctx, e);
             }
         } else {
             // Otherwise (i.e., it is a DataView),
-            if options.min > byte_length {
+            // If options["min"] > view.[[ByteLength]], return a promise rejected with a RangeError exception.
+            if options.min > byte_length as u64 {
                 let e: Value = ctx.eval(
-                    r#"new TypeError("options.min must be less than or equal to views byteLength")"#,
+                    r#"new RangeError("options.min must be less than or equal to views byteLength")"#,
                 )?;
                 return promise_rejected_with(&ctx, e);
             }
@@ -251,29 +259,34 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             // Resolve promise with «[ "value" → chunk, "done" → false ]».
             chunk_steps: {
                 let resolve = resolve.clone();
-                Box::new(move |chunk: Value<'js>| -> Result<()> {
+                Box::new(move |stream, controller, reader, chunk: Value<'js>| {
                     resolve.call((ReadableStreamReadResult {
                         value: Some(chunk),
                         done: false,
-                    },))
+                    },))?;
+                    Ok((stream, controller, reader))
                 })
             },
             // close steps, given chunk
             // Resolve promise with «[ "value" → chunk, "done" → true ]».
             close_steps: {
                 let resolve = resolve.clone();
-                Box::new(move |chunk: Value<'js>| -> Result<()> {
+                Box::new(move |stream, controller, reader, chunk: Value<'js>| {
                     resolve.call((ReadableStreamReadResult {
                         value: Some(chunk),
                         done: true,
-                    },))
+                    },))?;
+                    Ok((stream, controller, reader))
                 })
             },
             // error steps, given e
             // Reject promise with e.
             error_steps: {
                 let reject = reject.clone();
-                Box::new(move |e: Value<'js>| -> Result<()> { reject.call((e,)) })
+                Box::new(move |stream, controller, reader, e: Value<'js>| {
+                    reject.call((e,))?;
+                    Ok((stream, controller, reader))
+                })
             },
             trace: {
                 let resolve = resolve.clone();
@@ -285,9 +298,28 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             },
         };
 
+        let stream = OwnedBorrowMut::from_class(
+            reader
+                .generic
+                .stream
+                .clone()
+                .expect("ReadableStreamBYOBReader read called without stream"),
+        );
+
+        let controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+            stream
+                .controller
+                .clone()
+                .expect("ReadableStreamBYOBReader read called without controller"),
+        )
+        .into_byte_controller()
+        .expect("ReadableStreamBYOBReader read called without byte controller");
+
         // Perform ! ReadableStreamBYOBReaderRead(this, view, options["min"], readIntoRequest).
         Self::readable_stream_byob_reader_read(
             &ctx,
+            stream,
+            controller,
             reader.0,
             view,
             options.min,
@@ -298,65 +330,176 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         Ok(promise)
     }
 
-    fn release_lock(&mut self, ctx: Ctx<'js>) -> Result<()> {
+    fn release_lock(ctx: Ctx<'js>, reader: This<OwnedBorrowMut<'js, Self>>) -> Result<()> {
         // If this.[[stream]] is undefined, return.
-        let mut stream = match self.generic.stream.clone() {
+        let stream = match reader.generic.stream.clone() {
             None => {
                 return Ok(());
             },
             Some(stream) => OwnedBorrowMut::from_class(stream),
         };
 
-        let mut controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+        let controller = ReadableStreamControllerOwnedBorrowMut::from_class(
             stream
                 .controller
                 .clone()
                 .expect("releaseLock called on byob reader without controller"),
-        );
+        )
+        .into_byte_controller()
+        .expect("releaseLock called on byob reader with non-byte controller");
 
         // Perform ! ReadableStreamBYOBReaderRelease(this).
-        self.readable_stream_byob_reader_release(&ctx, &mut stream, &mut controller)
+        Self::readable_stream_byob_reader_release(&ctx, stream, controller, reader.0)?;
+        Ok(())
+    }
+
+    #[qjs(get)]
+    fn closed(&self) -> Promise<'js> {
+        self.generic.closed_promise.clone()
+    }
+
+    fn cancel(
+        ctx: Ctx<'js>,
+        reader: This<OwnedBorrowMut<'js, Self>>,
+        reason: Opt<Value<'js>>,
+    ) -> Result<Promise<'js>> {
+        let stream = match reader.generic.stream.clone() {
+            // If this.[[stream]] is undefined, return a promise rejected with a TypeError exception.
+            None => {
+                let e: Value =
+                    ctx.eval(r#"new TypeError("Cannot cancel a stream using a released reader")"#)?;
+                return promise_rejected_with(&ctx, e);
+            },
+            Some(stream) => OwnedBorrowMut::from_class(stream),
+        };
+
+        let controller = ReadableStreamControllerOwnedBorrowMut::from_class(
+            stream
+                .controller
+                .clone()
+                .expect("ReadableStreamDefaultReader cancel called without controller"),
+        );
+
+        // Return ! ReadableStreamReaderGenericCancel(this, reason).
+        let (promise, _, _, _) =
+            ReadableStreamGenericReader::readable_stream_reader_generic_cancel(
+                ctx.clone(),
+                stream,
+                controller,
+                reader.0.into(),
+                reason.0.unwrap_or(Value::new_undefined(ctx)),
+            )?;
+        Ok(promise)
     }
 }
 
 struct ReadableStreamBYOBReaderReadOptions {
-    min: usize,
+    min: u64,
 }
 
 impl<'js> FromJs<'js> for ReadableStreamBYOBReaderReadOptions {
-    fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
         let ty_name = value.type_name();
         let obj = value
             .as_object()
             .ok_or(Error::new_from_js(ty_name, "Object"))?;
 
-        let min = obj.get_optional::<_, _>("min")?.unwrap_or(1);
+        let min = obj.get_optional::<_, f64>("min")?.unwrap_or(1.0);
+        if min < u64::MIN as f64 || min > u64::MAX as f64 {
+            return Err(Exception::throw_type(
+                ctx,
+                "min on ReadableStreamBYOBReaderReadOptions must fit into unsigned long long",
+            ));
+        };
 
-        Ok(Self { min })
+        Ok(Self { min: min as u64 })
     }
 }
 
 pub(super) struct ReadableStreamReadIntoRequest<'js> {
-    chunk_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
-    close_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
-    error_steps: Box<dyn FnOnce(Value<'js>) -> Result<()> + 'js>,
-    trace: Box<dyn Fn(Tracer<'_, 'js>) + 'js>,
+    pub(super) chunk_steps: Box<
+        dyn FnOnce(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+                Value<'js>,
+            ) -> Result<(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+            )> + 'js,
+    >,
+    pub(super) close_steps: Box<
+        dyn FnOnce(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+                Value<'js>,
+            ) -> Result<(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+            )> + 'js,
+    >,
+    pub(super) error_steps: Box<
+        dyn FnOnce(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+                Value<'js>,
+            ) -> Result<(
+                OwnedBorrowMut<'js, ReadableStream<'js>>,
+                OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+                OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+            )> + 'js,
+    >,
+    pub(super) trace: Box<dyn Fn(Tracer<'_, 'js>) + 'js>,
 }
 
 impl<'js> ReadableStreamReadIntoRequest<'js> {
-    pub(super) fn chunk_steps(self, chunk: Value<'js>) -> Result<()> {
+    pub(super) fn chunk_steps(
+        self,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+        chunk: Value<'js>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+    )> {
         let chunk_steps = self.chunk_steps;
-        chunk_steps(chunk)
+        chunk_steps(stream, controller, reader, chunk)
     }
 
-    pub(super) fn close_steps(self, chunk: Value<'js>) -> Result<()> {
+    pub(super) fn close_steps(
+        self,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+        chunk: Value<'js>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+    )> {
         let close_steps = self.close_steps;
-        close_steps(chunk)
+        close_steps(stream, controller, reader, chunk)
     }
 
-    pub(super) fn error_steps(self, reason: Value<'js>) -> Result<()> {
+    pub(super) fn error_steps(
+        self,
+        stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
+        controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+        reason: Value<'js>,
+    ) -> Result<(
+        OwnedBorrowMut<'js, ReadableStream<'js>>,
+        OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
+        OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
+    )> {
         let error_steps = self.error_steps;
-        error_steps(reason)
+        error_steps(stream, controller, reader, reason)
     }
 }
 
