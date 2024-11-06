@@ -552,13 +552,13 @@ describe("web-platform-tests", () => {
     });
 
     describe("readable-byte-streams", () => {
-      // it("should pass bad-buffers-and-views.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-byte-streams/bad-buffers-and-views.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass bad-buffers-and-views.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/bad-buffers-and-views.any.js")
+            .default,
+          done
+        );
+      });
 
       it("should pass construct-byob-request.any.js tests", (done) => {
         runTest(

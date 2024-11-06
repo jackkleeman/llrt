@@ -1,12 +1,14 @@
 use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
+    atom::PredefinedAtom,
     class::{JsClass, OwnedBorrowMut, Trace, Tracer},
     function::Constructor,
     methods,
     prelude::{Opt, This},
-    Class, Ctx, Error, Exception, FromJs, Function, IntoJs, Object, Promise, Result, Value,
+    ArrayBuffer, Class, Ctx, Error, Exception, FromJs, Function, IntoJs, Object, Promise, Result,
+    Value,
 };
-use std::{collections::VecDeque, ops::Deref};
+use std::collections::VecDeque;
 
 use super::{
     byte_controller::ReadableByteStreamController, downgrade_owned_borrow_mut,
@@ -201,7 +203,13 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             Err(err) => return Err(err),
         };
 
-        let (buffer, byte_length, _) = view.get_array_buffer()?.unwrap();
+        let (buffer, byte_length) = match view.get_array_buffer() {
+            Ok((buffer, byte_length, _)) => (buffer, byte_length),
+            // this can happen if its detached
+            Err(Error::Exception) => return promise_rejected_with(&ctx, ctx.catch()),
+            Err(err) => return Err(err),
+        };
+
         // If view.[[ByteLength]] is 0, return a promise rejected with a TypeError exception.
         if byte_length == 0 {
             let e: Value = ctx.eval(r#"new TypeError("view must have non-zero byteLength")"#)?;
@@ -547,6 +555,51 @@ impl<'js> ViewBytes<'js> {
             "view must be an ArrayBufferView",
         ))
     }
+
+    pub(super) fn get_array_buffer(&self) -> Result<(ArrayBuffer<'js>, usize, usize)> {
+        Ok(self
+            .0
+            .get_array_buffer()?
+            .expect("invariant broken; ViewBytes may not contain ObjectBytes::Vec"))
+    }
+
+    pub(super) fn element_size(&self) -> usize {
+        match self.0 {
+            ObjectBytes::U8Array(_) => 1,
+            ObjectBytes::I8Array(_) => 1,
+            ObjectBytes::U16Array(_) => 2,
+            ObjectBytes::I16Array(_) => 2,
+            ObjectBytes::U32Array(_) => 4,
+            ObjectBytes::I32Array(_) => 4,
+            ObjectBytes::U64Array(_) => 8,
+            ObjectBytes::I64Array(_) => 8,
+            ObjectBytes::F32Array(_) => 4,
+            ObjectBytes::F64Array(_) => 8,
+            ObjectBytes::DataView(_) => 1,
+            ObjectBytes::Vec(_) => {
+                panic!("invariant broken; ViewBytes may not contain ObjectBytes::Vec")
+            },
+        }
+    }
+
+    pub(super) fn atom(&self) -> PredefinedAtom {
+        match self.0 {
+            ObjectBytes::U8Array(_) => PredefinedAtom::Uint8Array,
+            ObjectBytes::I8Array(_) => PredefinedAtom::Int8Array,
+            ObjectBytes::U16Array(_) => PredefinedAtom::Uint16Array,
+            ObjectBytes::I16Array(_) => PredefinedAtom::Int16Array,
+            ObjectBytes::U32Array(_) => PredefinedAtom::Uint32Array,
+            ObjectBytes::I32Array(_) => PredefinedAtom::Int32Array,
+            ObjectBytes::U64Array(_) => PredefinedAtom::BigUint64Array,
+            ObjectBytes::I64Array(_) => PredefinedAtom::BigInt64Array,
+            ObjectBytes::F32Array(_) => PredefinedAtom::Float32Array,
+            ObjectBytes::F64Array(_) => PredefinedAtom::Float64Array,
+            ObjectBytes::DataView(_) => PredefinedAtom::DataView,
+            ObjectBytes::Vec(_) => {
+                panic!("invariant broken; ViewBytes may not contain ObjectBytes::Vec")
+            },
+        }
+    }
 }
 
 impl<'js> FromJs<'js> for ViewBytes<'js> {
@@ -572,13 +625,5 @@ impl<'js> Trace<'js> for ViewBytes<'js> {
 impl<'js> IntoJs<'js> for ViewBytes<'js> {
     fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
         self.0.into_js(ctx)
-    }
-}
-
-impl<'js> Deref for ViewBytes<'js> {
-    type Target = ObjectBytes<'js>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }

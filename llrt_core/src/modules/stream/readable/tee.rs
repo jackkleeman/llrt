@@ -1948,7 +1948,7 @@ impl<'js> ReadableStream<'js> {
 }
 
 fn clone_as_uint8_array<'js>(ctx: Ctx<'js>, chunk: ViewBytes<'js>) -> Result<ViewBytes<'js>> {
-    let (buffer, byte_length, byte_offset) = chunk.get_array_buffer()?.unwrap();
+    let (buffer, byte_length, byte_offset) = chunk.get_array_buffer()?;
 
     // Let buffer be ? CloneArrayBuffer(O.[[ViewedArrayBuffer]], O.[[ByteOffset]], O.[[ByteLength]], %ArrayBuffer%).
     let buffer = ArrayBuffer::new_copy(

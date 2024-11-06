@@ -1,10 +1,6 @@
 use std::collections::VecDeque;
 
-use llrt_utils::{
-    bytes::ObjectBytes,
-    error_messages::ERROR_MSG_NOT_ARRAY_BUFFER,
-    result::ResultExt,
-};
+use llrt_utils::result::ResultExt;
 use rquickjs::{
     atom::PredefinedAtom,
     class::{OwnedBorrow, OwnedBorrowMut, Trace},
@@ -516,7 +512,7 @@ impl<'js> ReadableByteStreamController<'js> {
         // Let buffer be chunk.[[ViewedArrayBuffer]].
         // Let byteOffset be chunk.[[ByteOffset]].
         // Let byteLength be chunk.[[ByteLength]].
-        let (buffer, byte_length, byte_offset) = chunk.get_array_buffer()?.unwrap();
+        let (buffer, byte_length, byte_offset) = chunk.get_array_buffer()?;
 
         // If ! IsDetachedBuffer(buffer) is true, throw a TypeError exception.
         buffer.as_raw().ok_or(Exception::throw_type(
@@ -1244,20 +1240,7 @@ impl<'js> ReadableByteStreamController<'js> {
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
         // Set elementSize to the element size specified in the typed array constructors table for view.[[TypedArrayName]].
-        let (element_size, atom): (usize, PredefinedAtom) = match &*view {
-            ObjectBytes::U8Array(_) => (1, PredefinedAtom::Uint8Array),
-            ObjectBytes::I8Array(_) => (1, PredefinedAtom::Int8Array),
-            ObjectBytes::U16Array(_) => (2, PredefinedAtom::Uint16Array),
-            ObjectBytes::I16Array(_) => (2, PredefinedAtom::Int16Array),
-            ObjectBytes::U32Array(_) => (4, PredefinedAtom::Uint32Array),
-            ObjectBytes::I32Array(_) => (4, PredefinedAtom::Int32Array),
-            ObjectBytes::U64Array(_) => (8, PredefinedAtom::BigUint64Array),
-            ObjectBytes::I64Array(_) => (8, PredefinedAtom::BigInt64Array),
-            ObjectBytes::F32Array(_) => (4, PredefinedAtom::Float32Array),
-            ObjectBytes::F64Array(_) => (8, PredefinedAtom::Float64Array),
-            ObjectBytes::DataView(_) => (1, PredefinedAtom::DataView),
-            ObjectBytes::Vec(_) => panic!("ReadableByteStreamControllerPullInto called with view that is neither typed array nor dataview"),
-        };
+        let (element_size, atom) = (view.element_size(), view.atom());
 
         // Set ctor to the constructor specified in the typed array constructors table for view.[[TypedArrayName]].
         let ctor: Constructor = ctx.globals().get(atom)?;
@@ -1267,7 +1250,7 @@ impl<'js> ReadableByteStreamController<'js> {
 
         // Let byteOffset be view.[[ByteOffset]].
         // Let byteLength be view.[[ByteLength]].
-        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?.unwrap();
+        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?;
 
         // Let bufferResult be TransferArrayBuffer(view.[[ViewedArrayBuffer]]).
         let buffer_result = transfer_array_buffer(ctx.clone(), buffer);
@@ -1679,7 +1662,7 @@ impl<'js> ReadableByteStreamController<'js> {
         // Let firstDescriptor be controller.[[pendingPullIntos]][0].
         let first_descriptor_index = 0;
 
-        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?.unwrap();
+        let (buffer, byte_length, byte_offset) = view.get_array_buffer()?;
 
         // Let state be controller.[[stream]].[[state]].
         match stream.state {
@@ -1894,10 +1877,7 @@ impl<'js> ReadableByteStreamController<'js> {
         ctx: Ctx<'js>,
         chunk: ViewBytes<'js>,
     ) -> Result<()> {
-        let (array_buffer, byte_length, _) = chunk
-            .get_array_buffer()?
-            .ok_or(ERROR_MSG_NOT_ARRAY_BUFFER)
-            .or_throw(&ctx)?;
+        let (array_buffer, byte_length, _) = chunk.get_array_buffer()?;
 
         // If chunk.[[ByteLength]] is 0, throw a TypeError exception.
         if byte_length == 0 {
@@ -1997,7 +1977,7 @@ impl<'js> ReadableStreamBYOBRequest<'js> {
                 ));
             },
         };
-        let (buffer, _, _) = view.get_array_buffer()?.unwrap();
+        let (buffer, _, _) = view.get_array_buffer()?;
         drop(byob_request);
 
         // If ! IsDetachedBuffer(this.[[view]].[[ArrayBuffer]]) is true, throw a TypeError exception.
@@ -2047,7 +2027,7 @@ impl<'js> ReadableStreamBYOBRequest<'js> {
         let view = view.0.unwrap_or_else(|| Value::new_undefined(ctx.clone()));
         let view = ViewBytes::from_js(&ctx, view)?;
 
-        let (buffer, _, _) = view.get_array_buffer()?.unwrap();
+        let (buffer, _, _) = view.get_array_buffer()?;
 
         // If ! IsDetachedBuffer(view.[[ViewedArrayBuffer]]) is true, throw a TypeError exception.
         if buffer.as_bytes().is_none() {
