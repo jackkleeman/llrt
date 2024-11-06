@@ -276,7 +276,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             chunk_steps: {
                 let resolve = resolve.clone();
                 Box::new(move |stream, controller, reader, chunk: Value<'js>| {
-                    resolve.call((ReadableStreamReadResult {
+                    let () = resolve.call((ReadableStreamReadResult {
                         value: Some(chunk),
                         done: false,
                     },))?;
@@ -288,7 +288,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             close_steps: {
                 let resolve = resolve.clone();
                 Box::new(move |stream, controller, reader, chunk: Value<'js>| {
-                    resolve.call((ReadableStreamReadResult {
+                    let () = resolve.call((ReadableStreamReadResult {
                         value: Some(chunk),
                         done: true,
                     },))?;
@@ -300,7 +300,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
             error_steps: {
                 let reject = reject.clone();
                 Box::new(move |stream, controller, reader, e: Value<'js>| {
-                    reject.call((e,))?;
+                    let () = reject.call((e,))?;
                     Ok((stream, controller, reader))
                 })
             },

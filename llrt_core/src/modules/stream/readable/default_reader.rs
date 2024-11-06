@@ -198,7 +198,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
             close_steps: {
                 let resolve = resolve.clone();
                 Box::new(move |_, stream, controller, reader| {
-                    resolve.call((ReadableStreamReadResult {
+                    let () = resolve.call((ReadableStreamReadResult {
                         value: None,
                         done: true,
                     },))?;
@@ -210,7 +210,7 @@ impl<'js> ReadableStreamDefaultReader<'js> {
             error_steps: {
                 let reject = reject.clone();
                 Box::new(move |stream, controller, reader, e| {
-                    reject.call((e,))?;
+                    let () = reject.call((e,))?;
                     Ok((stream, controller, reader))
                 })
             },

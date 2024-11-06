@@ -305,7 +305,8 @@ impl<'js> ReadableStream<'js> {
         match reader {
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(mut r) => {
                 // Reject reader.[[closedPromise]] with e.
-                r.generic
+                let () = r
+                    .generic
                     .reject_closed_promise
                     .as_ref()
                     .expect("ReadableStreamError called without rejection function")
@@ -324,7 +325,8 @@ impl<'js> ReadableStream<'js> {
             },
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(mut r) => {
                 // Reject reader.[[closedPromise]] with e.
-                r.generic
+                let () = r
+                    .generic
                     .reject_closed_promise
                     .as_ref()
                     .expect("ReadableStreamError called without rejection function")
@@ -481,7 +483,8 @@ impl<'js> ReadableStream<'js> {
         match &mut reader {
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamDefaultReader(r) => {
                 // Resolve reader.[[closedPromise]] with undefined.
-                r.generic
+                let () = r
+                    .generic
                     .resolve_closed_promise
                     .as_ref()
                     .expect("ReadableStreamClose called without resolution function")
@@ -504,7 +507,8 @@ impl<'js> ReadableStream<'js> {
                 Ok((stream, controller, reader))
             },
             ReadableStreamReaderOwnedBorrowMut::ReadableStreamBYOBReader(r) => {
-                r.generic
+                let () = r
+                    .generic
                     .resolve_closed_promise
                     .as_ref()
                     .expect("ReadableStreamClose called without resolution function")
@@ -1142,7 +1146,8 @@ impl<'js> ReadableStreamGenericReader<'js> {
         // If stream.[[state]] is "readable", reject reader.[[closedPromise]] with a TypeError exception.
         if let ReadableStreamState::Readable = stream.state {
             let e: Value = ctx.eval(r#"new TypeError("Reader was released and can no longer be used to monitor the stream's closedness")"#)?;
-            self.reject_closed_promise
+            let () = self
+                .reject_closed_promise
                 .as_ref()
                 .expect("ReadableStreamReaderGenericRelease called without rejection function")
                 .call((e,))?;
@@ -1564,7 +1569,7 @@ fn promise_resolved_with<'js>(ctx: &Ctx<'js>, value: Result<Value<'js>>) -> Resu
 
 fn promise_rejected_with<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Promise<'js>> {
     let (promise, _, reject) = Promise::new(ctx)?;
-    reject.call((value,))?;
+    let () = reject.call((value,))?;
 
     Ok(promise)
 }

@@ -242,7 +242,7 @@ impl<'js> ReadableStream<'js> {
                         )?;
                         // If canceled1 is false or canceled2 is false, resolve cancelPromise with undefined.
                         if reason_1.get().is_none() || reason_2.get().is_none() {
-                            resolve_cancel_promise.call((Value::new_undefined(ctx),))?;
+                            let () = resolve_cancel_promise.call((Value::new_undefined(ctx),))?;
                         }
 
                         Ok(())
@@ -402,7 +402,7 @@ impl<'js> ReadableStream<'js> {
                                                 ),
                                                 clone_result,
                                             )?;
-                                        resolve_cancel_promise.call((promise,))?;
+                                        let () = resolve_cancel_promise.call((promise,))?;
                                         // Return.
                                         return Ok(());
                                     },
@@ -575,10 +575,18 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    if let Some(r) = reason_1.get() { r.trace(tracer) }
-                    if let Some(r) = reason_2.get() { r.trace(tracer) }
-                    if let Some(b) = branch_1.get() { b.trace(tracer) }
-                    if let Some(b) = branch_2.get() { b.trace(tracer) }
+                    if let Some(r) = reason_1.get() {
+                        r.trace(tracer)
+                    }
+                    if let Some(r) = reason_2.get() {
+                        r.trace(tracer)
+                    }
+                    if let Some(b) = branch_1.get() {
+                        b.trace(tracer)
+                    }
+                    if let Some(b) = branch_2.get() {
+                        b.trace(tracer)
+                    }
                     resolve_cancel_promise.trace(tracer);
                     reject_cancel_promise.trace(tracer);
                 })
@@ -629,7 +637,7 @@ impl<'js> ReadableStream<'js> {
                 composite_reason.into_js(&ctx)?,
             )?;
             // Resolve cancelPromise with cancelResult.
-            resolve_cancel_promise.call((cancel_result,))?;
+            let () = resolve_cancel_promise.call((cancel_result,))?;
         }
 
         // Return cancelPromise.
@@ -667,7 +675,7 @@ impl<'js> ReadableStream<'js> {
                 composite_reason.into_js(&ctx)?,
             )?;
             // Resolve cancelPromise with cancelResult.
-            resolve_cancel_promise.call((cancel_result,))?;
+            let () = resolve_cancel_promise.call((cancel_result,))?;
         }
 
         // Return cancelPromise.
@@ -956,7 +964,7 @@ impl<'js> ReadableStream<'js> {
 
                     // If canceled1 is false or canceled2 is false, resolve cancelPromise with undefined.
                     if reason_1.get().is_none() || reason_2.get().is_none() {
-                        resolve_cancel_promise.call((Value::new_undefined(ctx),))?;
+                        let () = resolve_cancel_promise.call((Value::new_undefined(ctx),))?;
                     }
                     Ok(())
                 },
@@ -1140,7 +1148,7 @@ impl<'js> ReadableStream<'js> {
                                                 ),
                                                 err.clone(),
                                             )?;
-                                        resolve_cancel_promise.call((promise,))?;
+                                        let () = resolve_cancel_promise.call((promise,))?;
 
                                         // Return.
                                         return Ok(());
@@ -1318,9 +1326,15 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    if let Ok(r) = reader.try_borrow() { r.trace(tracer) }
-                    if let Some(r) = reason_1.get() { r.trace(tracer) }
-                    if let Some(r) = reason_2.get() { r.trace(tracer) }
+                    if let Ok(r) = reader.try_borrow() {
+                        r.trace(tracer)
+                    }
+                    if let Some(r) = reason_1.get() {
+                        r.trace(tracer)
+                    }
+                    if let Some(r) = reason_2.get() {
+                        r.trace(tracer)
+                    }
                     branch_1.trace(tracer);
                     branch_1_controller.trace(tracer);
                     branch_2.trace(tracer);
@@ -1533,7 +1547,7 @@ impl<'js> ReadableStream<'js> {
                                                 ),
                                                 err.clone(),
                                             )?;
-                                        resolve_cancel_promise.call((promise,))?;
+                                        let () = resolve_cancel_promise.call((promise,))?;
 
                                         // Return.
                                         return Ok(());
@@ -1746,9 +1760,15 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    if let Ok(r) = reader.try_borrow() { r.trace(tracer) }
-                    if let Some(r) = reason_1.get() { r.trace(tracer) }
-                    if let Some(r) = reason_2.get() { r.trace(tracer) }
+                    if let Ok(r) = reader.try_borrow() {
+                        r.trace(tracer)
+                    }
+                    if let Some(r) = reason_1.get() {
+                        r.trace(tracer)
+                    }
+                    if let Some(r) = reason_2.get() {
+                        r.trace(tracer)
+                    }
                     byob_branch.trace(tracer);
                     byob_branch_controller.trace(tracer);
                     other_branch.trace(tracer);

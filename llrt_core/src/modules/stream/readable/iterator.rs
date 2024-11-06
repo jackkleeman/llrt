@@ -168,7 +168,7 @@ impl<'js> IteratorRecord<'js> {
             // If value is not present, then
             None => {
                 // Let result be Completion(Call(iteratorRecord.[[NextMethod]], iteratorRecord.[[Iterator]])).
-                
+
                 self.next_method.call((This(self.iterator.clone()),))
             },
             // Else,
@@ -466,7 +466,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
                 let resolve = resolve.clone();
                 move |stream, controller, reader, chunk| {
                     // Resolve promise with chunk.
-                    resolve.call((chunk,))?;
+                    let () = resolve.call((chunk,))?;
                     Ok((stream, controller, reader))
                 }
             }),
@@ -492,7 +492,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
                             ctx, stream, controller, reader,
                         )?;
                     // Resolve promise with end of iteration.
-                    resolve.call((eoi_symbol,))?;
+                    let () = resolve.call((eoi_symbol,))?;
                     Ok((stream, controller, Some(reader.into())))
                 }
             }),
@@ -515,7 +515,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
                         reader,
                     )?;
                 // Reject promise with e.
-                reject.call((e,))?;
+                let () = reject.call((e,))?;
                 Ok((stream, controller, Some(reader.into())))
             }),
             trace: Box::new({
