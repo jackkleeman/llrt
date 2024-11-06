@@ -585,6 +585,7 @@ describe("web-platform-tests", () => {
         );
       });
 
+      // requires WebAssembly (!?)
       // it("should pass non-transferable-buffers.any.js tests", (done) => {
       //   runTest(
       //     require("./web-platform-tests/streams/readable-byte-streams/non-transferable-buffers.any.js")
