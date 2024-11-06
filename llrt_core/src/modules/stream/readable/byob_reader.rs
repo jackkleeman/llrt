@@ -1,11 +1,12 @@
 use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
-    class::{OwnedBorrowMut, Trace, Tracer},
+    class::{JsClass, OwnedBorrowMut, Trace, Tracer},
+    function::Constructor,
     methods,
     prelude::{Opt, This},
-    Class, Ctx, Error, Exception, FromJs, Promise, Result, Value,
+    Class, Ctx, Error, Exception, FromJs, Function, IntoJs, Object, Promise, Result, Value,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, ops::Deref};
 
 use super::{
     byte_controller::ReadableByteStreamController, downgrade_owned_borrow_mut,
@@ -125,7 +126,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
         reader: OwnedBorrowMut<'js, Self>,
-        view: ObjectBytes<'js>,
+        view: ViewBytes<'js>,
         min: u64,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
@@ -158,6 +159,12 @@ impl<'js> ReadableStreamBYOBReader<'js> {
 
 #[methods(rename_all = "camelCase")]
 impl<'js> ReadableStreamBYOBReader<'js> {
+    // this is required by web platform tests
+    #[qjs(get)]
+    pub fn constructor(ctx: Ctx<'js>) -> Result<Option<Constructor>> {
+        <ReadableStreamBYOBReader as JsClass>::constructor(&ctx)
+    }
+
     #[qjs(constructor)]
     pub fn new(
         ctx: Ctx<'js>,
@@ -171,7 +178,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
     fn read(
         ctx: Ctx<'js>,
         reader: This<OwnedBorrowMut<'js, Self>>,
-        view: ObjectBytes<'js>,
+        view: Opt<Value<'js>>,
         options: Opt<Value<'js>>,
     ) -> Result<Promise<'js>> {
         let options = match options.0 {
@@ -183,6 +190,15 @@ impl<'js> ReadableStreamBYOBReader<'js> {
                 },
                 Err(err) => return Err(err),
             },
+        };
+
+        let view = view.0.unwrap_or_else(|| Value::new_undefined(ctx.clone()));
+        let view = match ViewBytes::from_js(&ctx, view) {
+            Ok(view) => view,
+            Err(Error::Exception) => {
+                return promise_rejected_with(&ctx, ctx.catch());
+            },
+            Err(err) => return Err(err),
         };
 
         let (buffer, byte_length, _) = view.get_array_buffer()?.unwrap();
@@ -212,7 +228,7 @@ impl<'js> ReadableStreamBYOBReader<'js> {
         }
 
         // If view has a [[TypedArrayName]] internal slot,
-        let typed_array_len = match &view {
+        let typed_array_len = match &view.0 {
             ObjectBytes::U8Array(a) => Some(a.len()),
             ObjectBytes::I8Array(a) => Some(a.len()),
             ObjectBytes::U16Array(a) => Some(a.len()),
@@ -506,5 +522,63 @@ impl<'js> ReadableStreamReadIntoRequest<'js> {
 impl<'js> Trace<'js> for ReadableStreamReadIntoRequest<'js> {
     fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
         (self.trace)(tracer)
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ViewBytes<'js>(ObjectBytes<'js>);
+
+impl<'js> ViewBytes<'js> {
+    pub(super) fn from_object(ctx: &Ctx<'js>, object: &Object<'js>) -> Result<Self> {
+        let ab = ctx
+            .globals()
+            .get::<_, Object>(rquickjs::atom::PredefinedAtom::ArrayBuffer)?;
+        if ab
+            .get::<_, Function>("isView")?
+            .call::<_, bool>((object.clone(),))?
+        {
+            if let Some(view) = ObjectBytes::from_array_buffer(object)? {
+                return Ok(Self(view));
+            }
+        }
+
+        Err(Exception::throw_type(
+            ctx,
+            "view must be an ArrayBufferView",
+        ))
+    }
+}
+
+impl<'js> FromJs<'js> for ViewBytes<'js> {
+    fn from_js(ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
+        match value.as_object() {
+            None => {
+                Err(Exception::throw_type(
+                    ctx,
+                    "view must be typed DataView, Buffer, ArrayBuffer, or Uint8Array, but is not an object",
+                ))
+            },
+            Some(object) => Self::from_object(ctx, object),
+        }
+    }
+}
+
+impl<'js> Trace<'js> for ViewBytes<'js> {
+    fn trace<'a>(&self, tracer: Tracer<'a, 'js>) {
+        self.0.trace(tracer);
+    }
+}
+
+impl<'js> IntoJs<'js> for ViewBytes<'js> {
+    fn into_js(self, ctx: &Ctx<'js>) -> Result<Value<'js>> {
+        self.0.into_js(ctx)
+    }
+}
+
+impl<'js> Deref for ViewBytes<'js> {
+    type Target = ObjectBytes<'js>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

@@ -4,6 +4,7 @@ import subsetTests from "./web-platform-tests/common/subset-tests.js";
 import encodings from "./web-platform-tests/encoding/resources/encodings.js";
 import {
   ReadableStream,
+  ByteLengthQueuingStrategy,
   CountQueuingStrategy,
   ReadableStreamDefaultReader,
   ReadableByteStreamController,
@@ -54,12 +55,14 @@ const runTest = (test, done) => {
   });
 
   const oldRs = globalThis.ReadableStream;
+  const oldBlqs = globalThis.ByteLengthQueuingStrategy;
   const oldCqs = globalThis.CountQueuingStrategy;
   const oldRsdr = globalThis.ReadableStreamDefaultReader;
   const oldRbsc = globalThis.ReadableByteStreamController;
   const oldRsbr = globalThis.ReadableStreamBYOBRequest;
   const oldGc = globalThis.gc;
   globalThis.ReadableStream = ReadableStream;
+  globalThis.ByteLengthQueuingStrategy = ByteLengthQueuingStrategy;
   globalThis.CountQueuingStrategy = CountQueuingStrategy;
   globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
   globalThis.ReadableByteStreamController = ReadableByteStreamController;
@@ -68,6 +71,7 @@ const runTest = (test, done) => {
 
   context.add_completion_callback((tests, status, assertions) => {
     globalThis.ReadableStream = oldRs;
+    globalThis.ByteLengthQueuingStrategy = oldBlqs;
     globalThis.CountQueuingStrategy = oldCqs;
     globalThis.ReadableStreamDefaultReader = oldRsdr;
     globalThis.ReadableByteStreamController = oldRbsc;
@@ -564,6 +568,7 @@ describe("web-platform-tests", () => {
         );
       });
 
+      // relies on an arraybuffer transfer implementation (called via structured clone transfer)
       // it("should pass enqueue-with-detached-buffer.any.js tests", (done) => {
       //   runTest(
       //     require("./web-platform-tests/streams/readable-byte-streams/enqueue-with-detached-buffer.any.js")
@@ -572,13 +577,13 @@ describe("web-platform-tests", () => {
       //   );
       // });
 
-      // it("should pass general.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-byte-streams/general.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass general.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/general.any.js")
+            .default,
+          done
+        );
+      });
 
       // it("should pass non-transferable-buffers.any.js tests", (done) => {
       //   runTest(

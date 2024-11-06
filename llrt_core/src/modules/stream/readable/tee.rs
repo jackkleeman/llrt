@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use llrt_utils::bytes::ObjectBytes;
 use rquickjs::{
     atom::PredefinedAtom,
     class::{OwnedBorrowMut, Trace},
@@ -24,7 +23,10 @@ use crate::{
     utils::clone::structured_clone,
 };
 
-use super::{ReadableStream, ReadableStreamController, ReadableStreamControllerOwnedBorrowMut};
+use super::{
+    byob_reader::ViewBytes, ReadableStream, ReadableStreamController,
+    ReadableStreamControllerOwnedBorrowMut,
+};
 
 impl<'js> ReadableStream<'js> {
     pub(super) fn readable_stream_tee(
@@ -330,7 +332,7 @@ impl<'js> ReadableStream<'js> {
                             let chunk_2 = chunk.clone();
 
                             // If canceled2 is false and cloneForBranch2 is true,
-                            let chunk_2 = if !reason_2.get().is_some() && clone_for_branch_2 {
+                            let chunk_2 = if reason_2.get().is_none() && clone_for_branch_2 {
                                 // Let cloneResult be StructuredClone(chunk2).
                                 let clone_result = structured_clone(&ctx, chunk_2, Opt(None));
                                 match clone_result {
@@ -415,7 +417,7 @@ impl<'js> ReadableStream<'js> {
                             };
 
                             // If canceled1 is false, perform ! ReadableStreamDefaultControllerEnqueue(branch1.[[controller]], chunk1).
-                            if !reason_1.get().is_some() {
+                            if reason_1.get().is_none() {
                                 let mut stream_1 = OwnedBorrowMut::from_class(
                                     branch_1
                                         .get()
@@ -438,7 +440,7 @@ impl<'js> ReadableStream<'js> {
                             }
 
                             // If canceled2 is false, perform ! ReadableStreamDefaultControllerEnqueue(branch2.[[controller]], chunk2).
-                            if !reason_2.get().is_some() {
+                            if reason_2.get().is_none() {
                                 let mut stream_2 = OwnedBorrowMut::from_class(
                                     branch_2
                                         .get()
@@ -505,7 +507,7 @@ impl<'js> ReadableStream<'js> {
                     // Set reading to false.
                     reading.store(false, Ordering::Relaxed);
                     // If canceled1 is false, perform ! ReadableStreamDefaultControllerClose(branch1.[[controller]]).
-                    if !reason_1.get().is_some() {
+                    if reason_1.get().is_none() {
                         let stream = OwnedBorrowMut::from_class(
                             branch_1
                                 .get()
@@ -528,7 +530,7 @@ impl<'js> ReadableStream<'js> {
                         }
                     }
                     // If canceled2 is false, perform ! ReadableStreamDefaultControllerClose(branch2.[[controller]]).
-                    if !reason_2.get().is_some() {
+                    if reason_2.get().is_none() {
                         let stream = OwnedBorrowMut::from_class(
                             branch_2
                                 .get()
@@ -551,7 +553,7 @@ impl<'js> ReadableStream<'js> {
                         }
                     }
                     // If canceled1 is false or canceled2 is false, resolve cancelPromise with undefined.
-                    if !reason_1.get().is_some() || !reason_2.get().is_some() {
+                    if reason_1.get().is_none() || reason_2.get().is_none() {
                         resolve_cancel_promise.call((Value::new_undefined(ctx.clone()),))?
                     }
                     Ok((stream, controller, reader))
@@ -573,10 +575,10 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    reason_1.get().map(|r| r.trace(tracer));
-                    reason_2.get().map(|r| r.trace(tracer));
-                    branch_1.get().map(|b| b.trace(tracer));
-                    branch_2.get().map(|b| b.trace(tracer));
+                    if let Some(r) = reason_1.get() { r.trace(tracer) }
+                    if let Some(r) = reason_2.get() { r.trace(tracer) }
+                    if let Some(b) = branch_1.get() { b.trace(tracer) }
+                    if let Some(b) = branch_2.get() { b.trace(tracer) }
                     resolve_cancel_promise.trace(tracer);
                     reject_cancel_promise.trace(tracer);
                 })
@@ -622,7 +624,7 @@ impl<'js> ReadableStream<'js> {
             let (cancel_result, _, _, _) = ReadableStream::readable_stream_cancel(
                 ctx.clone(),
                 stream,
-                controller.into(),
+                controller,
                 Some(reader),
                 composite_reason.into_js(&ctx)?,
             )?;
@@ -1074,7 +1076,7 @@ impl<'js> ReadableStream<'js> {
                     let stream_class = stream.into_inner();
                     let controller_class = controller.into_inner();
                     let chunk_reader_class = chunk_reader.map(|r| r.into_inner());
-                    let chunk = ObjectBytes::from_js(&ctx, chunk)?;
+                    let chunk = ViewBytes::from_js(&ctx, chunk)?;
                     // Queue a microtask to perform the following steps:
                     let f = {
                         let ctx = ctx.clone();
@@ -1150,7 +1152,7 @@ impl<'js> ReadableStream<'js> {
                             }
 
                             // If canceled1 is false, perform ! ReadableByteStreamControllerEnqueue(branch1.[[controller]], chunk1).
-                            if !reason_1.get().is_some() {
+                            if reason_1.get().is_none() {
                                 let mut branch_1 = OwnedBorrowMut::from_class(branch_1.clone());
                                 let branch_1_controller =
                                     OwnedBorrowMut::from_class(branch_1_controller.clone());
@@ -1159,7 +1161,7 @@ impl<'js> ReadableStream<'js> {
                             }
 
                             // If canceled2 is false, perform ! ReadableByteStreamControllerEnqueue(branch2.[[controller]], chunk2).
-                            if !reason_2.get().is_some() {
+                            if reason_2.get().is_none() {
                                 let mut branch_2 = OwnedBorrowMut::from_class(branch_2.clone());
                                 let branch_2_controller =
                                     OwnedBorrowMut::from_class(branch_2_controller.clone());
@@ -1249,7 +1251,7 @@ impl<'js> ReadableStream<'js> {
                     let mut branch_2_reader = branch_2.reader_mut();
 
                     // If canceled1 is false, perform ! ReadableByteStreamControllerClose(branch1.[[controller]]).
-                    if !reason_1.get().is_some() {
+                    if reason_1.get().is_none() {
                         (branch_1, branch_1_controller, branch_1_reader) =
                             ReadableByteStreamController::readable_byte_stream_controller_close(
                                 ctx.clone(),
@@ -1259,7 +1261,7 @@ impl<'js> ReadableStream<'js> {
                             )?;
                     }
                     // If canceled2 is false, perform ! ReadableByteStreamControllerClose(branch2.[[controller]]).
-                    if !reason_2.get().is_some() {
+                    if reason_2.get().is_none() {
                         (branch_2, branch_2_controller, branch_2_reader) =
                             ReadableByteStreamController::readable_byte_stream_controller_close(
                                 ctx.clone(),
@@ -1291,7 +1293,7 @@ impl<'js> ReadableStream<'js> {
                     }
 
                     // If canceled1 is false or canceled2 is false, resolve cancelPromise with undefined.
-                    if !reason_1.get().is_some() || !reason_2.get().is_some() {
+                    if reason_1.get().is_none() || reason_2.get().is_none() {
                         resolve_cancel_promise.call((Value::new_undefined(ctx.clone()),))?
                     }
                     Ok((stream, controller, reader))
@@ -1316,9 +1318,9 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    reader.try_borrow().ok().map(|r| r.trace(tracer));
-                    reason_1.get().map(|r| r.trace(tracer));
-                    reason_2.get().map(|r| r.trace(tracer));
+                    if let Ok(r) = reader.try_borrow() { r.trace(tracer) }
+                    if let Some(r) = reason_1.get() { r.trace(tracer) }
+                    if let Some(r) = reason_2.get() { r.trace(tracer) }
                     branch_1.trace(tracer);
                     branch_1_controller.trace(tracer);
                     branch_2.trace(tracer);
@@ -1353,7 +1355,7 @@ impl<'js> ReadableStream<'js> {
         branch_2: OwnedBorrowMut<'js, ReadableStream<'js>>,
         resolve_cancel_promise: Function<'js>,
         reject_cancel_promise: Function<'js>,
-        view: ObjectBytes<'js>,
+        view: ViewBytes<'js>,
         for_branch_2: bool,
     ) -> Result<()> {
         let branch_1_controller = match branch_1
@@ -1460,7 +1462,7 @@ impl<'js> ReadableStream<'js> {
                     let controller_class = controller.into_inner();
                     let chunk_reader_class = chunk_reader.into_inner();
 
-                    let chunk = ObjectBytes::from_js(&ctx, chunk)?;
+                    let chunk = ViewBytes::from_js(&ctx, chunk)?;
                     // Queue a microtask to perform the following steps:
                     let f = {
                         let ctx = ctx.clone();
@@ -1687,7 +1689,7 @@ impl<'js> ReadableStream<'js> {
 
                     // If chunk is not undefined,
                     if !chunk.is_undefined() {
-                        let chunk = ObjectBytes::from_js(&ctx, chunk)?;
+                        let chunk = ViewBytes::from_js(&ctx, chunk)?;
 
                         // If byobCanceled is false, perform ! ReadableByteStreamControllerRespondWithNewView(byobBranch.[[controller]], chunk).
                         if !byob_canceled {
@@ -1744,9 +1746,9 @@ impl<'js> ReadableStream<'js> {
                 let resolve_cancel_promise = resolve_cancel_promise.clone();
                 let reject_cancel_promise = reject_cancel_promise.clone();
                 Box::new(move |tracer| {
-                    reader.try_borrow().ok().map(|r| r.trace(tracer));
-                    reason_1.get().map(|r| r.trace(tracer));
-                    reason_2.get().map(|r| r.trace(tracer));
+                    if let Ok(r) = reader.try_borrow() { r.trace(tracer) }
+                    if let Some(r) = reason_1.get() { r.trace(tracer) }
+                    if let Some(r) = reason_2.get() { r.trace(tracer) }
                     byob_branch.trace(tracer);
                     byob_branch_controller.trace(tracer);
                     other_branch.trace(tracer);
@@ -1925,7 +1927,7 @@ impl<'js> ReadableStream<'js> {
     }
 }
 
-fn clone_as_uint8_array<'js>(ctx: Ctx<'js>, chunk: ObjectBytes<'js>) -> Result<ObjectBytes<'js>> {
+fn clone_as_uint8_array<'js>(ctx: Ctx<'js>, chunk: ViewBytes<'js>) -> Result<ViewBytes<'js>> {
     let (buffer, byte_length, byte_offset) = chunk.get_array_buffer()?.unwrap();
 
     // Let buffer be ? CloneArrayBuffer(O.[[ViewedArrayBuffer]], O.[[ByteOffset]], O.[[ByteLength]], %ArrayBuffer%).

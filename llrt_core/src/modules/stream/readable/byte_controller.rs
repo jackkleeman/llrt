@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use llrt_utils::{
     bytes::ObjectBytes,
-    error_messages::{ERROR_MSG_NOT_ARRAY_BUFFER, ERROR_MSG_NOT_ARRAY_BUFFER_VIEW},
+    error_messages::ERROR_MSG_NOT_ARRAY_BUFFER,
     result::ResultExt,
 };
 use rquickjs::{
@@ -10,16 +10,18 @@ use rquickjs::{
     class::{OwnedBorrow, OwnedBorrowMut, Trace},
     function::Constructor,
     methods,
-    prelude::This,
-    ArrayBuffer, Class, Ctx, Error, Exception, IntoJs, Object, Promise, Result, TypedArray, Value,
+    prelude::{Opt, This},
+    ArrayBuffer, Class, Ctx, Error, Exception, FromJs, IntoJs, Object, Promise, Result, TypedArray,
+    Value,
 };
 
 use super::{
-    byob_reader::ReadableStreamReadIntoRequest, class_from_owned_borrow_mut, copy_data_block_bytes,
-    promise_resolved_with, transfer_array_buffer, upon_promise, CancelAlgorithm, Null,
-    PullAlgorithm, ReadableStream, ReadableStreamBYOBReader, ReadableStreamController,
-    ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
-    ReadableStreamState, StartAlgorithm, Undefined, UnderlyingSource,
+    byob_reader::{ReadableStreamReadIntoRequest, ViewBytes},
+    class_from_owned_borrow_mut, copy_data_block_bytes, promise_resolved_with,
+    transfer_array_buffer, upon_promise, CancelAlgorithm, Null, PullAlgorithm, ReadableStream,
+    ReadableStreamBYOBReader, ReadableStreamController, ReadableStreamReadRequest,
+    ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, ReadableStreamState, StartAlgorithm,
+    Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]
@@ -263,7 +265,7 @@ impl<'js> ReadableByteStreamController<'js> {
         Ok((
             OwnedBorrowMut::from_class(controller),
             OwnedBorrowMut::from_class(stream),
-            reader.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r)),
+            reader.map(ReadableStreamReaderOwnedBorrowMut::from_class),
         ))
     }
 
@@ -389,7 +391,7 @@ impl<'js> ReadableByteStreamController<'js> {
 
             // Let view be ! Construct(%Uint8Array%, « firstDescriptor’s buffer, firstDescriptor’s byte offset + firstDescriptor’s bytes filled, firstDescriptor’s byte length − firstDescriptor’s bytes filled »).
             let ctor: Constructor = ctx.globals().get(PredefinedAtom::Uint8Array)?;
-            let view: ObjectBytes = ctor.construct((
+            let view: ViewBytes = ctor.construct((
                 first_descriptor.buffer.clone(),
                 first_descriptor.byte_offset + first_descriptor.bytes_filled,
                 first_descriptor.byte_length - first_descriptor.bytes_filled,
@@ -500,7 +502,7 @@ impl<'js> ReadableByteStreamController<'js> {
         // Let stream be controller.[[stream]].
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
-        chunk: ObjectBytes<'js>,
+        chunk: ViewBytes<'js>,
     ) -> Result<(
         OwnedBorrowMut<'js, Self>,
         OwnedBorrowMut<'js, ReadableStream<'js>>,
@@ -586,7 +588,7 @@ impl<'js> ReadableByteStreamController<'js> {
 
                 // Let transferredView be ! Construct(%Uint8Array%, « transferredBuffer, byteOffset, byteLength »).
                 let ctor: Constructor = ctx.globals().get(PredefinedAtom::Uint8Array)?;
-                let transferred_view: ObjectBytes =
+                let transferred_view: ViewBytes =
                     ctor.construct((transferred_buffer, byte_offset, byte_length))?;
 
                 let mut c = controller.into();
@@ -946,7 +948,7 @@ impl<'js> ReadableByteStreamController<'js> {
                     std::cmp::min(total_bytes_to_copy_remaining, head_of_queue.byte_length);
                 // Let destStart be pullIntoDescriptor’s byte offset + pullIntoDescriptor’s bytes filled.
                 let dest_start: usize =
-                    pull_into_descriptor.byte_offset + pull_into_descriptor.bytes_filled as usize;
+                    pull_into_descriptor.byte_offset + pull_into_descriptor.bytes_filled;
                 // Perform ! CopyDataBlockBytes(pullIntoDescriptor’s buffer.[[ArrayBufferData]], destStart, headOfQueue’s buffer.[[ArrayBufferData]], headOfQueue’s byte offset, bytesToCopy).
                 copy_data_block_bytes(
                     ctx,
@@ -1087,7 +1089,7 @@ impl<'js> ReadableByteStreamController<'js> {
     fn readable_byte_stream_controller_convert_pull_into_descriptor(
         ctx: Ctx<'js>,
         pull_into_descriptor: PullIntoDescriptor<'js>,
-    ) -> Result<ObjectBytes<'js>> {
+    ) -> Result<ViewBytes<'js>> {
         let PullIntoDescriptor {
             // Let bytesFilled be pullIntoDescriptor’s bytes filled.
             bytes_filled,
@@ -1105,7 +1107,7 @@ impl<'js> ReadableByteStreamController<'js> {
             byte_offset,
             bytes_filled / element_size,
         ))?;
-        ObjectBytes::from(&ctx, &view)
+        ViewBytes::from_object(&ctx, &view)
     }
 
     pub(super) fn pull_steps(
@@ -1237,12 +1239,12 @@ impl<'js> ReadableByteStreamController<'js> {
         // Let stream be controller.[[stream]].
         mut stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut reader: OwnedBorrowMut<'js, ReadableStreamBYOBReader<'js>>,
-        view: ObjectBytes<'js>,
+        view: ViewBytes<'js>,
         min: u64,
         read_into_request: ReadableStreamReadIntoRequest<'js>,
     ) -> Result<()> {
         // Set elementSize to the element size specified in the typed array constructors table for view.[[TypedArrayName]].
-        let (element_size, atom): (usize, PredefinedAtom) = match view {
+        let (element_size, atom): (usize, PredefinedAtom) = match &*view {
             ObjectBytes::U8Array(_) => (1, PredefinedAtom::Uint8Array),
             ObjectBytes::I8Array(_) => (1, PredefinedAtom::Int8Array),
             ObjectBytes::U16Array(_) => (2, PredefinedAtom::Uint16Array),
@@ -1672,7 +1674,7 @@ impl<'js> ReadableByteStreamController<'js> {
         stream: OwnedBorrowMut<'js, ReadableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, Self>,
         reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
-        view: ObjectBytes<'js>,
+        view: ViewBytes<'js>,
     ) -> Result<()> {
         // Let firstDescriptor be controller.[[pendingPullIntos]][0].
         let first_descriptor_index = 0;
@@ -1890,17 +1892,8 @@ impl<'js> ReadableByteStreamController<'js> {
     fn enqueue(
         this: This<OwnedBorrowMut<'js, Self>>,
         ctx: Ctx<'js>,
-        chunk: Object<'js>,
+        chunk: ViewBytes<'js>,
     ) -> Result<()> {
-        let chunk = if let Some(chunk) = ObjectBytes::from_array_buffer(&chunk)? {
-            chunk
-        } else {
-            return Err(Exception::throw_message(
-                &ctx,
-                ERROR_MSG_NOT_ARRAY_BUFFER_VIEW,
-            ));
-        };
-
         let (array_buffer, byte_length, _) = chunk
             .get_array_buffer()?
             .ok_or(ERROR_MSG_NOT_ARRAY_BUFFER)
@@ -1949,13 +1942,23 @@ impl<'js> ReadableByteStreamController<'js> {
     fn error(
         ctx: Ctx<'js>,
         controller: This<OwnedBorrowMut<'js, Self>>,
-        e: Value<'js>,
+        e: Opt<Value<'js>>,
     ) -> Result<()> {
-        let mut stream = OwnedBorrowMut::from_class(controller.stream.clone().unwrap());
+        let mut stream = OwnedBorrowMut::from_class(
+            controller
+                .stream
+                .clone()
+                .expect("error() called on ReadableStreamDefaultController without stream"),
+        );
         let reader = stream.reader_mut();
-
         // Perform ! ReadableByteStreamControllerError(this, e).
-        Self::readable_byte_stream_controller_error(&ctx, stream, controller.0, reader, e)?;
+        Self::readable_byte_stream_controller_error(
+            &ctx,
+            stream,
+            controller.0,
+            reader,
+            e.0.unwrap_or(Value::new_undefined(ctx.clone())),
+        )?;
         Ok(())
     }
 }
@@ -1963,7 +1966,7 @@ impl<'js> ReadableByteStreamController<'js> {
 #[derive(Trace, Clone)]
 #[rquickjs::class]
 pub(crate) struct ReadableStreamBYOBRequest<'js> {
-    pub(super) view: Option<ObjectBytes<'js>>,
+    pub(super) view: Option<ViewBytes<'js>>,
     controller: Option<Class<'js, ReadableByteStreamController<'js>>>,
 }
 
@@ -1975,7 +1978,7 @@ impl<'js> ReadableStreamBYOBRequest<'js> {
     }
 
     #[qjs(get)]
-    fn view(&self) -> Null<ObjectBytes<'js>> {
+    fn view(&self) -> Null<ViewBytes<'js>> {
         Null(self.view.clone())
     }
 
@@ -2027,7 +2030,7 @@ impl<'js> ReadableStreamBYOBRequest<'js> {
     fn respond_with_new_view(
         ctx: Ctx<'js>,
         byob_request: This<OwnedBorrow<'js, Self>>,
-        view: ObjectBytes<'js>,
+        view: Opt<Value<'js>>,
     ) -> Result<()> {
         // If this.[[controller]] is undefined, throw a TypeError exception.
         let controller = match &byob_request.controller {
@@ -2040,6 +2043,9 @@ impl<'js> ReadableStreamBYOBRequest<'js> {
             },
         };
         drop(byob_request);
+
+        let view = view.0.unwrap_or_else(|| Value::new_undefined(ctx.clone()));
+        let view = ViewBytes::from_js(&ctx, view)?;
 
         let (buffer, _, _) = view.get_array_buffer()?.unwrap();
 

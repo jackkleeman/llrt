@@ -1,4 +1,4 @@
-use rquickjs::{class::Trace, methods, Ctx, Error, FromJs, Function, Result, Value};
+use rquickjs::{class::Trace, methods, Ctx, Error, FromJs, Function, Object, Result, Value};
 
 use super::ObjectExt;
 
@@ -53,4 +53,37 @@ impl<'js> FromJs<'js> for QueueingStrategyInit {
 
         Ok(Self { high_water_mark })
     }
+}
+
+#[derive(Trace)]
+#[rquickjs::class]
+pub(crate) struct ByteLengthQueuingStrategy<'js> {
+    high_water_mark: f64,
+    size: Function<'js>,
+}
+
+#[methods(rename_all = "camelCase")]
+impl<'js> ByteLengthQueuingStrategy<'js> {
+    #[qjs(constructor)]
+    fn new(ctx: Ctx<'js>, init: QueueingStrategyInit) -> Result<Self> {
+        // Set this.[[highWaterMark]] to init["highWaterMark"].
+        Ok(Self {
+            high_water_mark: init.high_water_mark,
+            size: Function::new(ctx, byte_length_queueing_strategy_size_function)?,
+        })
+    }
+
+    #[qjs(get)]
+    fn size(&self) -> Function<'js> {
+        self.size.clone()
+    }
+
+    #[qjs(get)]
+    fn high_water_mark(&self) -> f64 {
+        self.high_water_mark
+    }
+}
+
+fn byte_length_queueing_strategy_size_function(chunk: Object<'_>) -> Result<f64> {
+    chunk.get("byteLength")
 }

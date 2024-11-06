@@ -1,7 +1,8 @@
 use llrt_modules::ModuleInfo;
 use llrt_utils::module::export_default;
 use readable::{
-    CountQueuingStrategy, ReadableByteStreamController, ReadableStreamBYOBRequest, ReadableStream, ReadableStreamDefaultReader,
+    ByteLengthQueuingStrategy, CountQueuingStrategy, ReadableByteStreamController, ReadableStream,
+    ReadableStreamBYOBRequest, ReadableStreamDefaultReader,
 };
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
@@ -39,6 +40,7 @@ pub struct StreamModule;
 impl ModuleDef for StreamModule {
     fn declare(declare: &Declarations) -> Result<()> {
         declare.declare(stringify!(ReadableStream))?;
+        declare.declare(stringify!(ByteLengthQueuingStrategy))?;
         declare.declare(stringify!(CountQueuingStrategy))?;
         declare.declare(stringify!(ReadableStreamDefaultReader))?;
         declare.declare(stringify!(ReadableByteStreamController))?;
@@ -51,6 +53,7 @@ impl ModuleDef for StreamModule {
     fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
         export_default(ctx, exports, |default| {
             Class::<ReadableStream>::define(default)?;
+            Class::<ByteLengthQueuingStrategy>::define(default)?;
             Class::<CountQueuingStrategy>::define(default)?;
             Class::<ReadableStreamDefaultReader>::define(default)?;
             Class::<ReadableByteStreamController>::define(default)?;

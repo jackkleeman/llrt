@@ -4,12 +4,10 @@ use std::{
 };
 
 use crate::modules::events::abort_signal::AbortSignal;
-use byob_reader::ReadableStreamReadIntoRequest;
+use byob_reader::{ReadableStreamReadIntoRequest, ViewBytes};
 use default_controller::ReadableStreamDefaultController;
 use iterator::{IteratorKind, IteratorRecord, ReadableStreamAsyncIterator};
-use llrt_utils::{
-    bytes::ObjectBytes, error_messages::ERROR_MSG_ARRAY_BUFFER_DETACHED, result::ResultExt,
-};
+use llrt_utils::{error_messages::ERROR_MSG_ARRAY_BUFFER_DETACHED, result::ResultExt};
 use rquickjs::{
     atom::PredefinedAtom,
     class::{JsClass, OwnedBorrow, OwnedBorrowMut, Trace, Tracer},
@@ -22,16 +20,16 @@ use super::{writeable::WriteableStream, ReadableWritablePair};
 
 mod byob_reader;
 mod byte_controller;
-mod count_queueing_strategy;
 mod default_controller;
 mod default_reader;
 mod iterator;
+mod queueing_strategy;
 mod tee;
 
 pub(crate) use byob_reader::ReadableStreamBYOBReader;
 pub(crate) use byte_controller::{ReadableByteStreamController, ReadableStreamBYOBRequest};
-pub(crate) use count_queueing_strategy::CountQueuingStrategy;
 pub(crate) use default_reader::ReadableStreamDefaultReader;
+pub(crate) use queueing_strategy::{ByteLengthQueuingStrategy, CountQueuingStrategy};
 
 #[rquickjs::class]
 #[derive(Trace)]
@@ -432,7 +430,7 @@ impl<'js> ReadableStream<'js> {
         stream: OwnedBorrowMut<'js, Self>,
         controller: OwnedBorrowMut<'js, ReadableByteStreamController<'js>>,
         reader: Option<ReadableStreamReaderOwnedBorrowMut<'js>>,
-        chunk: ObjectBytes<'js>,
+        chunk: ViewBytes<'js>,
         done: bool,
     ) -> Result<(
         OwnedBorrowMut<'js, Self>,
@@ -935,8 +933,16 @@ impl<'js> FromJs<'js> for ReadableStreamType {
         let str = match typ {
             Type::String => value.into_string().unwrap(),
             Type::Object => {
-                if let Some(to_string) = value.get_optional::<_, Function>("toString")? {
+                if let Some(to_string) = value
+                    .get_optional::<_, Value>("toString")?
+                    .and_then(|s| s.into_function())
+                {
                     to_string.call(())?
+                } else if let Some(value_of) = value
+                    .get_optional::<_, Value>("valueOf")?
+                    .and_then(|s| s.into_function())
+                {
+                    value_of.call(())?
                 } else {
                     return Err(Error::new_from_js("Object", "String"));
                 }
@@ -1042,8 +1048,16 @@ impl<'js> FromJs<'js> for ReadableStreamReaderMode {
         let mode = match typ {
             Type::String => value.into_string().unwrap(),
             Type::Object => {
-                if let Some(to_string) = value.get_optional::<_, Function>("toString")? {
+                if let Some(to_string) = value
+                    .get_optional::<_, Value>("toString")?
+                    .and_then(|s| s.into_function())
+                {
                     to_string.call(())?
+                } else if let Some(value_of) = value
+                    .get_optional::<_, Value>("valueOf")?
+                    .and_then(|s| s.into_function())
+                {
+                    value_of.call(())?
                 } else {
                     return Err(Error::new_from_js("Object", "String"));
                 }

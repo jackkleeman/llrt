@@ -27,7 +27,7 @@ impl<'js> IntoAtom<'js> for SymbolAsyncIterator {
         // hack until PredefinedAtom::SymbolAsyncIterator is available
         Ok(Atom::from_predefined(ctx.clone(), unsafe {
             // SAFETY: PredefinedAtom is repr(u32)
-            std::mem::transmute(rquickjs::qjs::JS_ATOM_Symbol_asyncIterator as u32)
+            std::mem::transmute(rquickjs::qjs::JS_ATOM_Symbol_asyncIterator)
         }))
     }
 }
@@ -96,7 +96,7 @@ impl<'js> IteratorRecord<'js> {
         match method {
             None => {
                 let e: Value = ctx.eval(r#"new TypeError("Object is not an iterator")"#)?;
-                return Err(ctx.throw(e));
+                Err(ctx.throw(e))
             },
             Some(method) => {
                 // Return ? GetIteratorFromMethod(obj, method).
@@ -168,8 +168,8 @@ impl<'js> IteratorRecord<'js> {
             // If value is not present, then
             None => {
                 // Let result be Completion(Call(iteratorRecord.[[NextMethod]], iteratorRecord.[[Iterator]])).
-                let r = self.next_method.call((This(self.iterator.clone()),));
-                r
+                
+                self.next_method.call((This(self.iterator.clone()),))
             },
             // Else,
             Some(value) => {
@@ -290,7 +290,7 @@ impl<'js> JsClass<'js> for ReadableStreamAsyncIterator<'js> {
         )?;
         proto.set_prototype(Some(&async_iterator_prototype))?;
         let implementor = rquickjs::class::impl_::MethodImpl::<Self>::new();
-        (&implementor).implement(&proto)?;
+        implementor.implement(&proto)?;
         let next_fn: Function<'js> = proto.get("next")?;
         // yup, the wpt tests really do check these.
         next_fn.set_name("next")?;
@@ -416,7 +416,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
                     );
                 }
 
-                return Self::return_steps(ctx.clone(), &iterator, value);
+                return Self::return_steps(ctx.clone(), iterator, value);
             }
         };
 
@@ -459,7 +459,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
         // Let reader be iterator’s reader.
         let reader = iterator.reader.clone();
         // Let promise be a new promise.
-        let (promise, resolve, reject) = Promise::new(&ctx)?;
+        let (promise, resolve, reject) = Promise::new(ctx)?;
         // Let readRequest be a new read request with the following items:
         let read_request = ReadableStreamReadRequest {
             chunk_steps: Box::new({
@@ -530,7 +530,7 @@ impl<'js> ReadableStreamAsyncIterator<'js> {
 
         // Perform ! ReadableStreamDefaultReaderRead(this, readRequest).
         ReadableStreamDefaultReader::readable_stream_default_reader_read(
-            &ctx,
+            ctx,
             stream,
             controller,
             reader,

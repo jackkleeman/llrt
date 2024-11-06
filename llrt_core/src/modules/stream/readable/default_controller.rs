@@ -421,7 +421,7 @@ impl<'js> ReadableStreamDefaultController<'js> {
 
             controller = OwnedBorrowMut::from_class(controller_class);
             stream = OwnedBorrowMut::from_class(stream_class);
-            reader = reader_class.map(|r| ReadableStreamReaderOwnedBorrowMut::from_class(r));
+            reader = reader_class.map(ReadableStreamReaderOwnedBorrowMut::from_class);
 
             match result {
                 // If result is an abrupt completion,
