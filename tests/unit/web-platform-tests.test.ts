@@ -601,13 +601,13 @@ describe("web-platform-tests", () => {
         );
       });
 
-      // it("should pass respond-after-enqueue.any.js tests", (done) => {
-      //   runTest(
-      //     require("./web-platform-tests/streams/readable-byte-streams/respond-after-enqueue.any.js")
-      //       .default,
-      //     done
-      //   );
-      // });
+      it("should pass respond-after-enqueue.any.js tests", (done) => {
+        runTest(
+          require("./web-platform-tests/streams/readable-byte-streams/respond-after-enqueue.any.js")
+            .default,
+          done
+        );
+      });
 
       it("should pass tee.any.js tests", (done) => {
         runTest(
