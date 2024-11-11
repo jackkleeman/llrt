@@ -13,12 +13,15 @@ use rquickjs::{
 };
 
 use crate::{
-    modules::stream::readable::{
-        byob_reader::ReadableStreamReadIntoRequest,
-        default_controller::ReadableStreamDefaultController, promise_resolved_with, upon_promise,
-        CancelAlgorithm, Null, PullAlgorithm, ReadableByteStreamController,
-        ReadableStreamBYOBReader, ReadableStreamDefaultReader, ReadableStreamReadRequest,
-        ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, StartAlgorithm,
+    modules::stream::{
+        readable::{
+            byob_reader::ReadableStreamReadIntoRequest,
+            default_controller::ReadableStreamDefaultController, promise_resolved_with,
+            CancelAlgorithm, Null, PullAlgorithm, ReadableByteStreamController,
+            ReadableStreamBYOBReader, ReadableStreamDefaultReader, ReadableStreamReadRequest,
+            ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, StartAlgorithm,
+        },
+        upon_promise,
     },
     utils::clone::structured_clone,
 };

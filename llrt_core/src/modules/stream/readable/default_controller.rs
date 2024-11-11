@@ -7,15 +7,18 @@ use rquickjs::{
     Class, Ctx, Error, Exception, Object, Promise, Result, Value,
 };
 
-use crate::modules::stream::readable::{
-    CancelAlgorithm, PullAlgorithm, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
-    StartAlgorithm,
+use crate::modules::stream::{
+    class_from_owned_borrow_mut,
+    readable::{
+        CancelAlgorithm, PullAlgorithm, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
+        StartAlgorithm,
+    },
+    upon_promise,
 };
 
 use super::{
-    class_from_owned_borrow_mut, promise_resolved_with, upon_promise, Null, ReadableStream,
-    ReadableStreamController, ReadableStreamReadRequest, ReadableStreamState, SizeAlgorithm,
-    Undefined, UnderlyingSource,
+    promise_resolved_with, Null, ReadableStream, ReadableStreamController,
+    ReadableStreamReadRequest, ReadableStreamState, SizeAlgorithm, Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]

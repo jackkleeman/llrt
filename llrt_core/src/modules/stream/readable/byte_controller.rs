@@ -11,13 +11,14 @@ use rquickjs::{
     Value,
 };
 
+use crate::modules::stream::{class_from_owned_borrow_mut, upon_promise};
+
 use super::{
     byob_reader::{ReadableStreamReadIntoRequest, ViewBytes},
-    class_from_owned_borrow_mut, copy_data_block_bytes, promise_resolved_with,
-    transfer_array_buffer, upon_promise, CancelAlgorithm, Null, PullAlgorithm, ReadableStream,
-    ReadableStreamBYOBReader, ReadableStreamController, ReadableStreamReadRequest,
-    ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut, ReadableStreamState, StartAlgorithm,
-    Undefined, UnderlyingSource,
+    copy_data_block_bytes, promise_resolved_with, transfer_array_buffer, CancelAlgorithm, Null,
+    PullAlgorithm, ReadableStream, ReadableStreamBYOBReader, ReadableStreamController,
+    ReadableStreamReadRequest, ReadableStreamReader, ReadableStreamReaderOwnedBorrowMut,
+    ReadableStreamState, StartAlgorithm, Undefined, UnderlyingSource,
 };
 
 #[derive(Trace, Default)]

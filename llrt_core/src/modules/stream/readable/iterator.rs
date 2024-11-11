@@ -13,9 +13,11 @@ use rquickjs::{
     Type, Value,
 };
 
+use crate::modules::stream::{class_from_owned_borrow_mut, upon_promise};
+
 use super::{
-    class_from_owned_borrow_mut, promise_resolved_with, upon_promise, ReadableStream,
-    ReadableStreamController, ReadableStreamControllerOwnedBorrowMut, ReadableStreamDefaultReader,
+    promise_resolved_with, ReadableStream, ReadableStreamController,
+    ReadableStreamControllerOwnedBorrowMut, ReadableStreamDefaultReader,
     ReadableStreamGenericReader, ReadableStreamReadRequest, ReadableStreamReadResult,
     ReadableStreamReaderOwnedBorrowMut,
 };

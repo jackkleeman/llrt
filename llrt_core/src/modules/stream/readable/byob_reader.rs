@@ -10,11 +10,13 @@ use rquickjs::{
 };
 use std::collections::VecDeque;
 
+use crate::modules::stream::downgrade_owned_borrow_mut;
+
 use super::{
-    byte_controller::ReadableByteStreamController, downgrade_owned_borrow_mut,
-    promise_rejected_with, ObjectExt, ReadableStream, ReadableStreamController,
-    ReadableStreamControllerOwnedBorrowMut, ReadableStreamGenericReader, ReadableStreamReadResult,
-    ReadableStreamReader, ReadableStreamState,
+    byte_controller::ReadableByteStreamController, promise_rejected_with, ObjectExt,
+    ReadableStream, ReadableStreamController, ReadableStreamControllerOwnedBorrowMut,
+    ReadableStreamGenericReader, ReadableStreamReadResult, ReadableStreamReader,
+    ReadableStreamState,
 };
 
 #[derive(Trace)]

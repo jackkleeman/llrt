@@ -8,10 +8,12 @@ use rquickjs::{
     Class, Ctx, Exception, Promise, Result, Value,
 };
 
+use crate::modules::stream::downgrade_owned_borrow_mut;
+
 use super::{
-    downgrade_owned_borrow_mut, promise_rejected_with, ReadableStream,
-    ReadableStreamControllerOwnedBorrowMut, ReadableStreamGenericReader, ReadableStreamReadRequest,
-    ReadableStreamReadResult, ReadableStreamReader, ReadableStreamState,
+    promise_rejected_with, ReadableStream, ReadableStreamControllerOwnedBorrowMut,
+    ReadableStreamGenericReader, ReadableStreamReadRequest, ReadableStreamReadResult,
+    ReadableStreamReader, ReadableStreamState,
 };
 
 #[derive(Trace)]
