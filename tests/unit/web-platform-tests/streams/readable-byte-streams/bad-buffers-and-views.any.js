@@ -4,7 +4,7 @@
 export default function(
   ctx
 ) {
-const { promise_test, test, async_test, assert_equals, assert_throws_js, assert_array_equals, assert_true, assert_false } = ctx;
+const { promise_test, test, async_test, assert_equals, assert_throws_js, assert_array_equals, assert_true, assert_false, assert_not_equals, promise_rejects_js } = ctx;
 
 promise_test(() => {
   const stream = new ReadableStream({

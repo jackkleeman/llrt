@@ -4,7 +4,7 @@ use default_controller::WritableStreamDefaultController;
 use default_writer::WritableStreamDefaultWriter;
 use rquickjs::{
     class::{OwnedBorrowMut, Trace},
-    prelude::{Opt, This},
+    prelude::{IntoArg, Opt, This},
     Class, Ctx, Exception, Function, Object, Promise, Result, Value,
 };
 
@@ -34,28 +34,104 @@ pub struct WritableStream<'js> {
 }
 
 #[derive(Clone)]
-struct ResolveablePromise<'js> {
-    promise: Promise<'js>,
-    resolve: Function<'js>,
-    reject: Function<'js>,
+enum ResolveablePromise<'js> {
+    Pending {
+        promise: Promise<'js>,
+        resolve: Function<'js>,
+        reject: Function<'js>,
+    },
+    Resolved {
+        promise: Promise<'js>,
+    },
+    Rejected {
+        promise: Promise<'js>,
+    },
 }
 
 impl<'js> ResolveablePromise<'js> {
     fn new(ctx: &Ctx<'js>) -> Result<Self> {
         let (promise, resolve, reject) = Promise::new(ctx)?;
-        Ok(Self {
+        Ok(Self::Pending {
             promise,
             resolve,
             reject,
         })
     }
+
+    fn resolved_with(ctx: &Ctx<'js>, value: Result<Value<'js>>) -> Result<Self> {
+        Ok(Self::Resolved {
+            promise: promise_resolved_with(ctx, value)?,
+        })
+    }
+
+    fn rejected_with(ctx: &Ctx<'js>, error: Value<'js>) -> Result<Self> {
+        Ok(Self::Rejected {
+            promise: promise_rejected_with(ctx, error)?,
+        })
+    }
+
+    fn resolve(&mut self, value: impl IntoArg<'js>) -> Result<()> {
+        match self {
+            Self::Pending {
+                promise,
+                resolve,
+                reject: _,
+            } => {
+                let () = resolve.call((value,))?;
+                *self = Self::Resolved {
+                    promise: promise.clone(),
+                };
+                Ok(())
+            },
+            _ => Ok(()),
+        }
+    }
+
+    fn reject(&mut self, value: impl IntoArg<'js>) -> Result<()> {
+        match self {
+            Self::Pending {
+                promise,
+                resolve: _,
+                reject,
+            } => {
+                let () = reject.call((value,))?;
+                *self = Self::Rejected {
+                    promise: promise.clone(),
+                };
+                Ok(())
+            },
+            _ => Ok(()),
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        return matches!(self, Self::Pending { .. });
+    }
+
+    fn promise(&self) -> &Promise<'js> {
+        match self {
+            Self::Pending { promise, .. }
+            | Self::Resolved { promise }
+            | Self::Rejected { promise } => promise,
+        }
+    }
 }
 
 impl<'js> Trace<'js> for ResolveablePromise<'js> {
     fn trace<'a>(&self, tracer: rquickjs::class::Tracer<'a, 'js>) {
-        self.promise.trace(tracer);
-        self.resolve.trace(tracer);
-        self.reject.trace(tracer);
+        match self {
+            Self::Pending {
+                promise,
+                resolve,
+                reject,
+            } => {
+                promise.trace(tracer);
+                resolve.trace(tracer);
+                reject.trace(tracer);
+            },
+            ResolveablePromise::Resolved { promise } => promise.trace(tracer),
+            ResolveablePromise::Rejected { promise } => promise.trace(tracer),
+        }
     }
 }
 
@@ -277,7 +353,7 @@ impl<'js> WritableStream<'js> {
             None => {},
             Some(ref pending_abort_request) => {
                 return Ok((
-                    pending_abort_request.promise.promise.clone(),
+                    pending_abort_request.promise.promise().clone(),
                     stream,
                     controller,
                     writer,
@@ -313,7 +389,7 @@ impl<'js> WritableStream<'js> {
                 Self::writable_stream_start_erroring(ctx, stream, controller, writer, reason)?;
         }
 
-        Ok((promise.promise, stream, controller, writer))
+        Ok((promise.promise().clone(), stream, controller, writer))
     }
 
     fn writable_stream_close(
@@ -348,12 +424,11 @@ impl<'js> WritableStream<'js> {
 
         // Let writer be stream.[[writer]].
         // If writer is not undefined, and stream.[[backpressure]] is true, and state is "writable", resolve writer.[[readyPromise]] with undefined.
-        if let Some(ref writer) = writer {
+        if let Some(ref mut writer) = writer {
             if stream.backpressure && matches!(state, WritableStreamState::Writable) {
                 let () = writer
                     .ready_promise
-                    .resolve
-                    .call((Value::new_undefined(ctx.clone()),))?;
+                    .resolve(Value::new_undefined(ctx.clone()))?;
             }
         }
 
@@ -364,7 +439,7 @@ impl<'js> WritableStream<'js> {
             )?;
 
         // Return promise.
-        Ok((promise.promise, stream, controller, writer))
+        Ok((promise.promise().clone(), stream, controller, writer))
     }
 
     fn writable_stream_start_erroring(
@@ -403,7 +478,7 @@ impl<'js> WritableStream<'js> {
         ctx: Ctx<'js>,
         mut stream: OwnedBorrowMut<'js, WritableStream<'js>>,
         mut controller: OwnedBorrowMut<'js, WritableStreamDefaultController<'js>>,
-        writer: Option<OwnedBorrowMut<'js, WritableStreamDefaultWriter<'js>>>,
+        mut writer: Option<OwnedBorrowMut<'js, WritableStreamDefaultWriter<'js>>>,
     ) -> Result<(
         OwnedBorrowMut<'js, Self>,
         OwnedBorrowMut<'js, WritableStreamDefaultController<'js>>,
@@ -422,8 +497,8 @@ impl<'js> WritableStream<'js> {
             .expect("stream in error state without stored error");
 
         // For each writeRequest of stream.[[writeRequests]]:
-        for write_request in &stream.write_requests {
-            let () = write_request.reject.call((stored_error.clone(),))?;
+        for write_request in &mut stream.write_requests {
+            let () = write_request.reject(stored_error.clone())?;
         }
 
         // Set stream.[[writeRequests]] to an empty list.
@@ -431,29 +506,29 @@ impl<'js> WritableStream<'js> {
 
         // Let abortRequest be stream.[[pendingAbortRequest]].
         // Set stream.[[pendingAbortRequest]] to undefined.
-        let abort_request = if let Some(pending_abort_request) = stream.pending_abort_request.take()
-        {
-            pending_abort_request
-        } else {
-            // If stream.[[pendingAbortRequest]] is undefined,
-            // Perform ! WritableStreamRejectCloseAndClosedPromiseIfNeeded(stream).
-            stream.writable_stream_reject_close_and_closed_promise_if_needed(
-                ctx,
-                writer.as_deref(),
-            )?;
-            // Return.
-            return Ok((stream, controller, writer));
-        };
+        let mut abort_request =
+            if let Some(pending_abort_request) = stream.pending_abort_request.take() {
+                pending_abort_request
+            } else {
+                // If stream.[[pendingAbortRequest]] is undefined,
+                // Perform ! WritableStreamRejectCloseAndClosedPromiseIfNeeded(stream).
+                stream.writable_stream_reject_close_and_closed_promise_if_needed(
+                    ctx,
+                    writer.as_deref_mut(),
+                )?;
+                // Return.
+                return Ok((stream, controller, writer));
+            };
 
         // If abortRequest’s was already erroring is true,
         if abort_request.was_already_erroring {
             // Reject abortRequest’s promise with storedError.
-            let () = abort_request.promise.reject.call((stored_error.clone(),))?;
+            let () = abort_request.promise.reject(stored_error.clone())?;
 
             // Perform ! WritableStreamRejectCloseAndClosedPromiseIfNeeded(stream).
             stream.writable_stream_reject_close_and_closed_promise_if_needed(
                 ctx,
-                writer.as_deref(),
+                writer.as_deref_mut(),
             )?;
 
             // Return.
@@ -470,29 +545,28 @@ impl<'js> WritableStream<'js> {
         let _ = upon_promise::<Value<'js>, _>(ctx.clone(), promise, {
             move |ctx, result| {
                 let mut stream = OwnedBorrowMut::from_class(stream_class);
-                let writer = stream.writer_mut();
+                let mut writer = stream.writer_mut();
                 match result {
                     // Upon fulfillment of promise,
                     Ok(_) => {
                         // Resolve abortRequest’s promise with undefined.
                         let () = abort_request
                             .promise
-                            .resolve
-                            .call((Value::new_undefined(ctx.clone()),))?;
+                            .resolve(Value::new_undefined(ctx.clone()))?;
                         // Perform ! WritableStreamRejectCloseAndClosedPromiseIfNeeded(stream).
                         stream.writable_stream_reject_close_and_closed_promise_if_needed(
                             ctx,
-                            writer.as_deref(),
+                            writer.as_deref_mut(),
                         )
                     },
                     // Upon rejection of promise with reason reason,
                     Err(reason) => {
                         // Reject abortRequest’s promise with reason.
-                        let () = abort_request.promise.reject.call((reason,))?;
+                        let () = abort_request.promise.reject(reason)?;
                         // Perform ! WritableStreamRejectCloseAndClosedPromiseIfNeeded(stream).
                         stream.writable_stream_reject_close_and_closed_promise_if_needed(
                             ctx,
-                            writer.as_deref(),
+                            writer.as_deref_mut(),
                         )
                     },
                 }
@@ -506,12 +580,12 @@ impl<'js> WritableStream<'js> {
         &mut self,
         ctx: Ctx<'js>,
         // Let writer be stream.[[writer]].
-        writer: Option<&WritableStreamDefaultWriter<'js>>,
+        writer: Option<&mut WritableStreamDefaultWriter<'js>>,
     ) -> Result<()> {
         // If stream.[[closeRequest]] is not undefined,
-        if let Some(ref close_request) = self.close_request {
+        if let Some(ref mut close_request) = self.close_request {
             // Reject stream.[[closeRequest]] with stream.[[storedError]].
-            let () = close_request.reject.call((self.stored_error.clone(),))?;
+            let () = close_request.reject(self.stored_error.clone())?;
             // Set stream.[[closeRequest]] to undefined.
             self.close_request = None;
         }
@@ -519,13 +593,10 @@ impl<'js> WritableStream<'js> {
         // If writer is not undefined,
         if let Some(writer) = writer {
             // Reject writer.[[closedPromise]] with stream.[[storedError]].
-            let () = writer
-                .closed_promise
-                .reject
-                .call((self.stored_error.clone(),))?;
+            let () = writer.closed_promise.reject(self.stored_error.clone())?;
 
             // Set writer.[[closedPromise]].[[PromiseIsHandled]] to true.
-            set_promise_is_handled_to_true(ctx, &writer.closed_promise.promise)?;
+            set_promise_is_handled_to_true(ctx, writer.closed_promise.promise())?;
         }
 
         Ok(())
@@ -549,6 +620,14 @@ impl<'js> WritableStream<'js> {
             // Return true.
             true
         }
+    }
+
+    fn writable_stream_add_write_request(&mut self, ctx: &Ctx<'js>) -> Result<Promise<'js>> {
+        // Let promise be a new promise.
+        let promise = ResolveablePromise::new(ctx)?;
+        // Append promise to stream.[[writeRequests]].
+        self.write_requests.push_back(promise.clone());
+        Ok(promise.promise().clone())
     }
 
     fn writer_mut(&mut self) -> Option<OwnedBorrowMut<'js, WritableStreamDefaultWriter<'js>>> {
